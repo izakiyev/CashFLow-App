@@ -1,0 +1,11 @@
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+finflow.db
+finflow.log
+.env
+build/
+dist/
+scratch/
+currency_rates.json
