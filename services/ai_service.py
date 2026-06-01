@@ -105,6 +105,8 @@ class AIService:
         Cavabı mütləq AZƏRBAYCAN DİLİNDƏ (Azerbaijani language) verin.
         Professional, həvəsləndirici və qısa olun (maddələr şəklində).
         
+        DİQQƏT: Əgər təqdim olunan maliyyə məlumatları boşdursa (hesablarda pul yoxdur, tranzaksiya yoxdur), heç bir uydurma rəqəm və ya ssenari yaratmayın. Sadəcə bildirin ki, sistemdə hələ məlumat yoxdur və istifadəçini ilk tranzaksiyasını əlavə etməyə həvəsləndirin.
+        
         MİLLİYYƏ MƏLUMATLARI:
         {context}
         """
@@ -157,6 +159,8 @@ class AIAssistant:
         2. A short title (max 5 words).
         3. A detailed description (1-2 sentences).
         4. A color category (one of: 'blue', 'green', 'red', 'orange').
+        
+        IMPORTANT: If the financial data is completely empty (no accounts, no transactions), do not invent any numbers. Instead, provide 3 general tips about the importance of tracking finances, budgeting, and adding the first transaction.
         
         Format your response ONLY as a JSON list of objects:
         [{{ "icon": "📈", "title": "...", "description": "...", "color": "..." }}]
