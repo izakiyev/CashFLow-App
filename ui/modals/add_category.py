@@ -12,11 +12,19 @@ class AddCategoryModal(Modal):
         self.company_id = company_id
         self.type_filter = type_filter
         self.on_success = on_success
-        self.selected_color = CATEGORY_COLORS[0]
-        
         # Load existing categories for parent selection
         from services.category_service import get_categories
         all_cats = get_categories(self.company_id, type_filter=self.type_filter)
+        
+        # Auto-select a unique color
+        used_colors = {c.color.lower() for c in all_cats if c.color}
+        available_colors = [color for color in CATEGORY_COLORS if color.lower() not in used_colors]
+        
+        if available_colors:
+            self.selected_color = available_colors[0]
+        else:
+            self.selected_color = CATEGORY_COLORS[len(all_cats) % len(CATEGORY_COLORS)]
+            
         # Only top-level categories can be parents
         self.parents = [c for c in all_cats if c.parent_id is None]
         self.parent_id_map = {c.name: c.id for c in self.parents}

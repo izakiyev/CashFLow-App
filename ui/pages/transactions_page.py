@@ -9,12 +9,13 @@ from ui.modals.edit_transaction import EditTransactionModal
 from ui.modals.confirm_dialog import ConfirmDialog
 from services.transaction_service import get_transactions, delete_transaction, get_dashboard_summary, pay_transaction
 from services.account_service import get_accounts
+from services.category_service import get_categories
 from services.currency_service import format_currency
 from ui.utils.thread_worker import ThreadWorker
 import csv
 import os
 
-PAGE_SIZE = 100  # Number of transactions to load per page
+PAGE_SIZE = 25  # Number of transactions to load per page
 
 
 class TransactionRow(ctk.CTkFrame):
@@ -78,7 +79,7 @@ class TransactionRow(ctk.CTkFrame):
         if tx.get('status') == 'confirmed':
             pay_btn = ctk.CTkButton(self, text="Pay", width=50, height=32, corner_radius=8,
                                    fg_color=THEME["green"], hover_color=THEME["green_dark"],
-                                   font=FONTS["small"], command=lambda: self.on_pay(tx['id']))
+                                   text_color="white", font=FONTS["small"], command=lambda: self.on_pay(tx['id']))
             pay_btn.pack(side="right", padx=2)
 
         # Amount
@@ -150,6 +151,7 @@ class TransactionsPage(ctk.CTkFrame):
         now = datetime.now()
         first = datetime(now.year, now.month, 1)
         end = first - timedelta(days=1)
+        end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
         return datetime(end.year, end.month, 1), end
 
     @staticmethod
@@ -167,13 +169,18 @@ class TransactionsPage(ctk.CTkFrame):
         now = datetime.now()
         return datetime(now.year, 1, 1), now
 
-    def __init__(self, master, company_id, **kwargs):
+    def __init__(self, master, company_id, initial_account_id=None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.company_id = company_id
         self.filters = {}
+        if initial_account_id:
+            self.filters['account_id'] = initial_account_id
+            
         self._accounts_map = {}
         self._current_offset = 0
         self._date_from, self._date_to = self._this_month()
+        self._cached_summ = None
+        self._cached_summ_dates = (None, None)
 
         self.topbar = Topbar(self, title="Transactions")
         self.topbar.pack(fill="x")
@@ -259,26 +266,74 @@ class TransactionsPage(ctk.CTkFrame):
                            border_width=1, border_color=THEME["border"])
         bar.pack(fill="x", padx=20, pady=10)
 
-        self.search_bar = SearchBar(bar, self._on_search)
-        self.search_bar.pack(side="left", padx=10, pady=8)
+        # ── Row 1: Live Search + result count ────────────────────────────────
+        row1 = ctk.CTkFrame(bar, fg_color="transparent")
+        row1.pack(fill="x", padx=12, pady=(10, 4))
 
+        self.search_bar = SearchBar(row1, self._on_search, width=400)
+        self.search_bar.pack(side="left")
+
+        self.count_lbl = ctk.CTkLabel(row1, text="", font=FONTS["small"],
+                                      text_color=THEME["text_tertiary"])
+        self.count_lbl.pack(side="right", padx=8)
+
+        # ── Row 2: Type + Status + Account + Clear ────────────────────────────
+        row2 = ctk.CTkFrame(bar, fg_color="transparent")
+        row2.pack(fill="x", padx=12, pady=(0, 10))
+
+        ctk.CTkLabel(row2, text="Type:", font=FONTS["small"],
+                     text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
         self.type_seg = ctk.CTkSegmentedButton(
-            bar, values=["All", "Income", "Expense", "Transfer"],
-            command=self._on_type_filter, font=FONTS["body"]
+            row2, values=["All", "Income", "Expense", "Transfer"],
+            command=self._on_type_filter, font=FONTS["small"],
+            height=28
         )
         self.type_seg.set("All")
-        self.type_seg.pack(side="left", padx=10)
+        self.type_seg.pack(side="left", padx=(0, 16))
 
+        ctk.CTkLabel(row2, text="Status:", font=FONTS["small"],
+                     text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
         self.status_seg = ctk.CTkSegmentedButton(
-            bar, values=["All", "Paid", "Confirmed"],
-            command=self._on_status_filter, font=FONTS["body"]
+            row2, values=["All", "Paid", "Confirmed"],
+            command=self._on_status_filter, font=FONTS["small"],
+            height=28
         )
         self.status_seg.set("All")
-        self.status_seg.pack(side="left", padx=10)
+        self.status_seg.pack(side="left", padx=(0, 16))
 
-        self.count_lbl = ctk.CTkLabel(bar, text="", font=FONTS["small"],
-                                      text_color=THEME["text_tertiary"])
-        self.count_lbl.pack(side="right", padx=16)
+        ctk.CTkLabel(row2, text="Account:", font=FONTS["small"],
+                     text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
+        self.account_menu = ctk.CTkOptionMenu(
+            row2, values=["All Accounts"], font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"], button_color=THEME["border"],
+            button_hover_color=THEME["border"], text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["bg_secondary"],
+            height=28, width=140,
+            command=self._on_account_filter
+        )
+        self.account_menu.pack(side="left", padx=(0, 16))
+        self._account_id_map = {}  # label -> id
+
+        ctk.CTkLabel(row2, text="Category:", font=FONTS["small"],
+                     text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
+        self.category_menu = ctk.CTkOptionMenu(
+            row2, values=["All Categories"], font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"], button_color=THEME["border"],
+            button_hover_color=THEME["border"], text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["bg_secondary"],
+            height=28, width=140,
+            command=self._on_category_filter
+        )
+        self.category_menu.pack(side="left", padx=(0, 16))
+        self._category_id_map = {}  # label -> id
+
+        self.clear_btn = ctk.CTkButton(
+            row2, text="✕ Clear Filters", height=28, font=FONTS["small"],
+            fg_color="transparent", border_width=1, border_color=THEME["border"],
+            text_color=THEME["text_secondary"], hover_color=THEME["bg_tertiary"],
+            command=self._clear_filters
+        )
+        self.clear_btn.pack(side="right")
 
     # ─── Scrollable list ──────────────────────────────────────────────────────
     def _build_list(self):
@@ -360,7 +415,7 @@ class TransactionsPage(ctk.CTkFrame):
             except Exception:
                 pass
         self.filters['search'] = query
-        self._search_after_id = self.after(400, self.refresh)
+        self._search_after_id = self.after(350, self.refresh)
 
     def _on_type_filter(self, val):
         self.filters['type'] = val
@@ -368,6 +423,29 @@ class TransactionsPage(ctk.CTkFrame):
 
     def _on_status_filter(self, val):
         self.filters['status'] = val
+        self.refresh()
+
+    def _on_account_filter(self, label):
+        if label == "All Accounts":
+            self.filters.pop('account_id', None)
+        else:
+            self.filters['account_id'] = self._account_id_map.get(label)
+        self.refresh()
+
+    def _on_category_filter(self, label):
+        if label == "All Categories":
+            self.filters.pop('category_id', None)
+        else:
+            self.filters['category_id'] = self._category_id_map.get(label)
+        self.refresh()
+
+    def _clear_filters(self):
+        self.filters = {}
+        self.search_bar.clear()
+        self.type_seg.set("All")
+        self.status_seg.set("All")
+        self.account_menu.set("All Accounts")
+        self.category_menu.set("All Categories")
         self.refresh()
 
     def _prompt_delete(self, tx_id):
@@ -440,14 +518,28 @@ class TransactionsPage(ctk.CTkFrame):
         """Background thread: fetch accounts, KPI summary, and first page of transactions."""
         f = self._build_active_filters()
         accounts = get_accounts(self.company_id)
+        categories = get_categories(self.company_id)
         accounts_map = {a['id']: a['name'] for a in accounts}
-        summ = get_dashboard_summary(
-            self.company_id,
-            date_from=f.get('date_from'),
-            date_to=f.get('date_to')
-        )
+
+        # Cache KPI Summary to avoid recalculating on every keystroke
+        d_from = f.get('date_from')
+        d_to = f.get('date_to')
+        if not self._cached_summ or self._cached_summ_dates != (d_from, d_to):
+            self._cached_summ = get_dashboard_summary(
+                self.company_id,
+                date_from=d_from,
+                date_to=d_to
+            )
+            self._cached_summ_dates = (d_from, d_to)
+
         txs = get_transactions(self.company_id, f, limit=PAGE_SIZE, offset=0)
-        return {"accounts_map": accounts_map, "summ": summ, "txs": txs}
+        return {
+            "accounts_map": accounts_map, 
+            "accounts": accounts, 
+            "categories": categories,
+            "summ": self._cached_summ, 
+            "txs": txs
+        }
 
     def _fetch_more_data(self):
         """Background thread: fetch the next page of transactions."""
@@ -465,6 +557,43 @@ class TransactionsPage(ctk.CTkFrame):
 
         # Update accounts map
         self._accounts_map = data["accounts_map"]
+
+        # Populate account dropdown on first load (or if accounts changed)
+        accounts = data.get("accounts", [])
+        if accounts:
+            self._account_id_map = {a['name']: a['id'] for a in accounts}
+            labels = ["All Accounts"] + list(self._account_id_map.keys())
+            current = self.account_menu.get()
+            self.account_menu.configure(values=labels)
+            
+            # If we navigated here with an initial filter, set it
+            active_acc_id = self.filters.get('account_id')
+            if active_acc_id:
+                for label, acc_id in self._account_id_map.items():
+                    if acc_id == active_acc_id:
+                        self.account_menu.set(label)
+                        break
+            elif current not in labels:
+                self.account_menu.set("All Accounts")
+
+        # Populate category dropdown
+        categories = data.get("categories", [])
+        if categories:
+            # Build hierarchy
+            cat_dict = {c.id: c for c in categories}
+            self._category_id_map = {}
+            for c in categories:
+                label = c.name
+                if c.parent_id and c.parent_id in cat_dict:
+                    label = f"{cat_dict[c.parent_id].name} > {c.name}"
+                self._category_id_map[label] = c.id
+            
+            # Sort labels alphabetically
+            labels = ["All Categories"] + sorted(self._category_id_map.keys())
+            current = self.category_menu.get()
+            self.category_menu.configure(values=labels)
+            if current not in labels:
+                self.category_menu.set("All Categories")
 
         # Update KPIs (date-filtered)
         summ = data["summ"]
@@ -489,11 +618,11 @@ class TransactionsPage(ctk.CTkFrame):
                          font=FONTS["body"], text_color=THEME["text_tertiary"]).pack(pady=40)
             return
 
-        self._render_rows(txs)
+        def _on_done():
+            if len(txs) == PAGE_SIZE:
+                self._show_load_more_btn()
 
-        # Show "Load More" if we got a full page (there might be more)
-        if len(txs) == PAGE_SIZE:
-            self._show_load_more_btn()
+        self._render_rows(txs, on_complete=_on_done)
 
     def _append_rows(self, data):
         """Main thread: append the next page of rows to the existing list."""
@@ -513,22 +642,43 @@ class TransactionsPage(ctk.CTkFrame):
         suffix = "" if has_more else " (all loaded)"
         self.count_lbl.configure(text=f"{total_loaded} transactions{suffix}")
 
-        self._render_rows(txs)
+        def _on_done():
+            if has_more:
+                self._show_load_more_btn()
 
-        if has_more:
-            self._show_load_more_btn()
+        self._render_rows(txs, on_complete=_on_done)
 
-    def _render_rows(self, txs):
-        """Render a list of transaction rows into the scrollable frame."""
-        for tx in txs:
-            row = TransactionRow(
-                self.rows_scroll, tx=tx,
-                accounts_map=self._accounts_map,
-                on_edit=self._edit_tx,
-                on_delete=self._prompt_delete,
-                on_pay=self._pay_tx
-            )
-            row.pack(fill="x", pady=4)
+    def _render_rows(self, txs, chunk_size=5, on_complete=None):
+        """Render a list of transaction rows into the scrollable frame using chunking to prevent UI freeze."""
+        if not txs:
+            if on_complete: on_complete()
+            return
+
+        def _render_chunk(index):
+            try:
+                if not self.winfo_exists():
+                    return
+            except Exception:
+                return
+
+            end = min(index + chunk_size, len(txs))
+            for i in range(index, end):
+                tx = txs[i]
+                row = TransactionRow(
+                    self.rows_scroll, tx=tx,
+                    accounts_map=self._accounts_map,
+                    on_edit=self._edit_tx,
+                    on_delete=self._prompt_delete,
+                    on_pay=self._pay_tx
+                )
+                row.pack(fill="x", pady=4)
+            
+            if end < len(txs):
+                self.after(15, _render_chunk, end)
+            elif on_complete:
+                on_complete()
+
+        _render_chunk(0)
 
     def _show_load_more_btn(self):
         """Render a 'Load More' button at the bottom of the list."""

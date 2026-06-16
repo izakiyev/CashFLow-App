@@ -15,7 +15,7 @@ class Topbar(ctk.CTkFrame):
 
     def add_action(self, text, command, primary=False):
         fg_color = THEME["green"] if primary else THEME["bg_secondary"]
-        text_color = THEME["text_primary"] if primary else THEME["text_secondary"]
+        text_color = "white" if primary else THEME["text_secondary"]
         hover_color = THEME["green_dark"] if primary else THEME["border"]
 
         btn = ctk.CTkButton(self.actions_frame, text=text, font=FONTS["body"],

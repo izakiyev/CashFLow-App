@@ -47,11 +47,13 @@ class ReportsPage(ctk.CTkFrame):
 
     @staticmethod
     def _last_month():
+        from datetime import timedelta
         now = datetime.now()
         first = datetime(now.year, now.month, 1)
-        last_month_end = first - timedelta(days=1)
-        last_month_start = datetime(last_month_end.year, last_month_end.month, 1)
-        return last_month_start, last_month_end
+        end = first - timedelta(days=1)
+        end = end.replace(hour=23, minute=59, second=59, microsecond=999999)
+        start = datetime(end.year, end.month, 1)
+        return start, end
 
     @staticmethod
     def _last_n_months(n):

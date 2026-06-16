@@ -23,8 +23,8 @@ class KTIBCashFlowApp(ctk.CTk):
         self.title("KTIB Cash Flow — Financial Management")
         self.geometry("1400x800")
         self.minsize(1200, 700)
-        ctk.set_appearance_mode("Dark")
-        self._theme = "Dark"
+        ctk.set_appearance_mode("Light")
+        self._theme = "Light"
         
         # Set window icon
         from config import get_resource_path
@@ -38,7 +38,7 @@ class KTIBCashFlowApp(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         
         self.sidebar_frame = None
-        self.main_container = ctk.CTkFrame(self, corner_radius=0, fg_color=DARK["bg_primary"])
+        self.main_container = ctk.CTkFrame(self, corner_radius=0, fg_color=LIGHT["bg_primary"])
         self.main_container.grid(row=0, column=0, columnspan=2, sticky="nsew")
         self.main_container.grid_rowconfigure(0, weight=1)
         self.main_container.grid_columnconfigure(0, weight=1)
@@ -100,7 +100,7 @@ class KTIBCashFlowApp(ctk.CTk):
         if hasattr(self, 'current_page') and hasattr(self.current_page, 'refresh'):
             self.current_page.refresh()
 
-    def show_page(self, page_name):
+    def show_page(self, page_name, **kwargs):
         user = get_current_user()
 
         # If user has no active workspace, redirect to setup
@@ -130,7 +130,7 @@ class KTIBCashFlowApp(ctk.CTk):
         elif page_name == "cashflow":
             self.current_page = CashFlowPage(self.main_container, user["company_id"])
         elif page_name == "transactions":
-            self.current_page = TransactionsPage(self.main_container, user["company_id"])
+            self.current_page = TransactionsPage(self.main_container, user["company_id"], **kwargs)
         elif page_name == "accounts":
             self.current_page = AccountsPage(self.main_container, user["company_id"])
         elif page_name == "planned":

@@ -272,7 +272,7 @@ def pay_transaction(tx_id):
         session.commit()
         return True
 
-def get_spending_by_category(company_id, month=None, year=None, date_from=None, date_to=None):
+def get_spending_by_category(company_id, month=None, year=None, date_from=None, date_to=None, parent_category_id=None, tx_type='expense'):
     from services.currency_service import convert_to_base
     from database.models import Company, Category
     
@@ -283,7 +283,7 @@ def get_spending_by_category(company_id, month=None, year=None, date_from=None, 
         
         q = session.query(Transaction).filter(
             Transaction.company_id == company_id,
-            Transaction.type == 'expense'
+            Transaction.type == tx_type
         )
         if date_from and date_to:
             # Explicit date range
@@ -307,24 +307,43 @@ def get_spending_by_category(company_id, month=None, year=None, date_from=None, 
         
         data = {}
         for tx in txs:
-            if not tx.category_id:
-                cat_name = "Uncategorized"
-                cat_color = "#888888"
-            else:
-                cat = cat_map.get(tx.category_id)
-                if not cat:
-                    cat_name = "Uncategorized"
-                    cat_color = "#888888"
-                else:
-                    # If it's a subcategory, aggregate under parent
-                    if cat.parent_id:
-                        parent = cat_map.get(cat.parent_id)
-                        cat_name = parent.name if parent else cat.name
-                        cat_color = parent.color if parent else cat.color
-                    else:
-                        cat_name = cat.name
-                        cat_color = cat.color
+            cat_name = "Uncategorized"
+            cat_color = "#888888"
+            cat_id = None
             
+            if tx.category_id:
+                cat = cat_map.get(tx.category_id)
+                if cat:
+                    if parent_category_id is not None:
+                        # Drill-down mode: filter to only this parent
+                        if cat.parent_id == parent_category_id:
+                            # It is a subcategory of the requested parent
+                            cat_name = cat.name
+                            cat_color = cat.color
+                            cat_id = cat.id
+                        elif cat.id == parent_category_id:
+                            # Transaction directly assigned to the parent category
+                            cat_name = f"Directly in {cat.name}"
+                            cat_color = cat.color
+                            cat_id = cat.id
+                        else:
+                            # Belongs to a different parent entirely
+                            continue
+                    else:
+                        # Top-level view (default aggregation)
+                        if cat.parent_id:
+                            parent = cat_map.get(cat.parent_id)
+                            cat_name = parent.name if parent else cat.name
+                            cat_color = parent.color if parent else cat.color
+                            cat_id = parent.id if parent else cat.id
+                        else:
+                            cat_name = cat.name
+                            cat_color = cat.color
+                            cat_id = cat.id
+            else:
+                if parent_category_id is not None:
+                    continue # Skip uncategorized in drill-down view
+
             # Use SNAPSHOT if available, fallback to current rate conversion
             if tx.base_amount is not None:
                 amount = Decimal(str(tx.base_amount)) + Decimal(str(tx.base_edv_amount or 0))
@@ -334,10 +353,10 @@ def get_spending_by_category(company_id, month=None, year=None, date_from=None, 
                     amount += Decimal(str(tx.edv_amount))
             
             if cat_name not in data:
-                data[cat_name] = {"amount": Decimal("0.0"), "color": cat_color}
+                data[cat_name] = {"amount": Decimal("0.0"), "color": cat_color, "id": cat_id}
             data[cat_name]["amount"] += amount
             
-        return [{"name": name, "amount": float(d["amount"]), "color": d["color"]} for name, d in data.items()]
+        return [{"id": d["id"], "name": name, "amount": float(d["amount"]), "color": d["color"]} for name, d in data.items()]
 
 def get_daily_spending_trend(company_id, month=None, year=None, date_from=None, date_to=None):
     from services.currency_service import convert_to_base
@@ -419,6 +438,65 @@ def get_daily_spending_trend(company_id, month=None, year=None, date_from=None, 
             
         return labels, cumulative
 
+def get_daily_cashflow_series(company_id, date_from=None, date_to=None):
+    from services.currency_service import convert_to_base
+    from database.models import Company
+    
+    with get_session() as session:
+        now = datetime.now()
+        company = session.get(Company, company_id)
+        base_currency = company.currency if company else "AZN"
+
+        q = session.query(Transaction).filter(
+            Transaction.company_id == company_id,
+            Transaction.type.in_(['income', 'expense'])
+        )
+        
+        if date_from and date_to:
+            q = q.filter(Transaction.date >= date_from, Transaction.date <= date_to)
+            start_date = date_from.date()
+            end_date = date_to.date()
+        else:
+            # fallback to current month
+            start_date = datetime(now.year, now.month, 1).date()
+            import calendar
+            last_day = calendar.monthrange(now.year, now.month)[1]
+            end_date = datetime(now.year, now.month, last_day).date()
+            q = q.filter(
+                func.extract('month', Transaction.date) == now.month,
+                func.extract('year',  Transaction.date) == now.year
+            )
+
+        days_count = (end_date - start_date).days + 1
+        labels = []
+        for i in range(days_count):
+            d = start_date + __import__('datetime').timedelta(days=i)
+            labels.append(d.strftime("%b %d"))
+            
+        daily_inc = {i: Decimal("0.0") for i in range(days_count)}
+        daily_exp = {i: Decimal("0.0") for i in range(days_count)}
+        
+        for tx in q.order_by(Transaction.date).all():
+            offset = (tx.date.date() - start_date).days
+            if 0 <= offset < days_count:
+                if tx.base_amount is not None:
+                    amt = Decimal(str(tx.base_amount)) + Decimal(str(tx.base_edv_amount or 0))
+                else:
+                    amt = convert_to_base(tx.amount, tx.currency, base_currency)
+                    if tx.edv_amount:
+                        amt += Decimal(str(tx.edv_amount))
+                
+                if tx.type == 'income':
+                    daily_inc[offset] += amt
+                else:
+                    daily_exp[offset] += amt
+                    
+        inc_series = [float(daily_inc[i]) for i in range(days_count)]
+        exp_series = [float(daily_exp[i]) for i in range(days_count)]
+        
+        return labels, inc_series, exp_series
+
+
 def get_dashboard_summary(company_id, date_from=None, date_to=None):
     """Calculates Income, Expenses, and Total Balance for the Dashboard.
     Optionally filters by date_from / date_to; defaults to current month.
@@ -453,11 +531,21 @@ def get_dashboard_summary(company_id, date_from=None, date_to=None):
             days_in_period = max(1, (date_to.date() - date_from.date()).days + 1)
         elif date_from is None and date_to is None:
             # All Time — no date filter, use total days span
-            from sqlalchemy import func as sqlfunc
-            first_tx = session.query(sqlfunc.min(Transaction.date)).filter(
+            first_tx_record = session.query(Transaction).filter(
                 Transaction.company_id == company_id
-            ).scalar()
-            days_in_period = max(1, (now.date() - first_tx.date()).days + 1) if first_tx else 1
+            ).order_by(Transaction.date.asc()).first()
+            first_tx = first_tx_record.date if first_tx_record else None
+            
+            last_tx_record = session.query(Transaction).filter(
+                Transaction.company_id == company_id
+            ).order_by(Transaction.date.desc()).first()
+            last_tx = last_tx_record.date if last_tx_record else now
+            
+            if first_tx:
+                end_date = max(last_tx.date(), now.date())
+                days_in_period = max(1, (end_date - first_tx.date()).days + 1)
+            else:
+                days_in_period = 1
         else:
             # Default: current month
             month, year = now.month, now.year
@@ -530,15 +618,21 @@ def get_projected_balance(company_id):
         ).all()
 
         total_outgoing = Decimal("0.0")
+        total_incoming = Decimal("0.0")
+        
         for p in pending:
+            amt = Decimal(str(p.amount)) + Decimal(str(p.edv_amount or 0))
+            converted = convert_to_base(amt, p.currency, base_currency)
             if p.type == 'expense':
-                amt = Decimal(str(p.amount)) + Decimal(str(p.edv_amount or 0))
-                total_outgoing += convert_to_base(amt, p.currency, base_currency)
+                total_outgoing += converted
+            elif p.type == 'income':
+                total_incoming += converted
 
         return {
             "current_balance": float(total_balance),
             "pending_outgoing": float(total_outgoing),
-            "projected_balance": float(Decimal(str(total_balance)) - total_outgoing),
+            "pending_incoming": float(total_incoming),
+            "projected_balance": float(Decimal(str(total_balance)) + total_incoming - total_outgoing),
             "base_currency": base_currency
         }
 
@@ -583,11 +677,25 @@ def get_monthly_series(company_id, months=6, date_from=None, date_to=None):
                     curr_y += 1
         elif date_from is None and date_to is None:
             # All Time - dynamically calculate based on first transaction
-            first_tx = session.query(func.min(Transaction.date)).filter(Transaction.company_id == company_id).scalar()
+            first_tx_record = session.query(Transaction).filter(
+                Transaction.company_id == company_id
+            ).order_by(Transaction.date.asc()).first()
+            first_tx = first_tx_record.date if first_tx_record else None
+            
+            last_tx_record = session.query(Transaction).filter(
+                Transaction.company_id == company_id
+            ).order_by(Transaction.date.desc()).first()
+            last_tx = last_tx_record.date if last_tx_record else now
+
             month_list = []
             if first_tx:
                 start_m, start_y = first_tx.month, first_tx.year
-                end_m, end_y = now.month, now.year
+                end_m, end_y = last_tx.month, last_tx.year
+                
+                # Ensure we at least show up to the current month if all txs are in the past
+                if (end_y < now.year) or (end_y == now.year and end_m < now.month):
+                    end_m, end_y = now.month, now.year
+                    
                 curr_m, curr_y = start_m, start_y
                 while (curr_y < end_y) or (curr_y == end_y and curr_m <= end_m):
                     month_list.append((curr_m, curr_y))

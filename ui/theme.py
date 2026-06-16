@@ -1,23 +1,25 @@
 import re
 
 LIGHT = {
-    "green": "#1a9e75", "green_light": "#e1f5ee", "green_dark": "#0f6e56",
-    "red": "#c0392b", "red_light": "#fcebeb",
-    "blue": "#185fa5", "blue_light": "#e6f1fb",
-    "amber": "#ba7517", "amber_light": "#faeeda", "amber_dark": "#8c5811",
-    "bg_primary": "#ffffff", "bg_secondary": "#f7f7f5", "bg_tertiary": "#f0efec",
-    "text_primary": "#1a1a18", "text_secondary": "#6b6b67", "text_tertiary": "#9b9b97",
-    "border": "#e0e0dc", "sidebar_bg": "#f0efec",
+    "green": "#12b76a", "green_light": "#d1fadf", "green_dark": "#039855",
+    "red": "#f04438", "red_light": "#fee4e2",
+    "blue": "#2970ff", "blue_light": "#eff4ff",
+    "amber": "#f79009", "amber_light": "#fef0c7", "amber_dark": "#dc6803",
+    "bg_primary": "#ebeef2", "bg_secondary": "#ffffff", "bg_tertiary": "#dce0e5",
+    "text_primary": "#101828", "text_secondary": "#475467", "text_tertiary": "#98a2b3",
+    "border": "#cfd4dc", 
+    "sidebar_bg": "#1c2434", "sidebar_text": "#94a3b8", "sidebar_text_active": "#ffffff", "sidebar_hover": "#2c3545",
 }
 
 DARK = {
-    "green": "#1a9e75", "green_light": "#0d3d2e", "green_dark": "#5dcaa5",
-    "red": "#e05a5a", "red_light": "#3d1a1a",
-    "blue": "#4a90d9", "blue_light": "#0d2340",
-    "amber": "#d4890a", "amber_light": "#3a2a00", "amber_dark": "#f0a62d",
-    "bg_primary": "#1e1e1c", "bg_secondary": "#252523", "bg_tertiary": "#2c2c2a",
-    "text_primary": "#f0efec", "text_secondary": "#9b9b97", "text_tertiary": "#6b6b67",
-    "border": "#3a3a38", "sidebar_bg": "#161614",
+    "green": "#12b76a", "green_light": "#053321", "green_dark": "#15cc76",
+    "red": "#f04438", "red_light": "#4a1215",
+    "blue": "#2970ff", "blue_light": "#0a1f4d",
+    "amber": "#f79009", "amber_light": "#4a2c04", "amber_dark": "#f9a02e",
+    "bg_primary": "#101828", "bg_secondary": "#1d2939", "bg_tertiary": "#344054",
+    "text_primary": "#f2f4f7", "text_secondary": "#98a2b3", "text_tertiary": "#667085",
+    "border": "#344054", 
+    "sidebar_bg": "#0b111d", "sidebar_text": "#94a3b8", "sidebar_text_active": "#ffffff", "sidebar_hover": "#1d2939",
 }
 
 FONTS = {
