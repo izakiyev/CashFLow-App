@@ -260,6 +260,9 @@ class PlannedPage(ctk.CTkFrame):
 
         self._last_data = filtered_planned
         self.count_lbl.configure(text=f"{len(filtered_planned)} items found")
+        
+        if not filtered_planned:
+            self.table.show_empty(icon="📅", title="No planned payments", subtitle="Try adjusting your filters or search query.")
 
         # Update KPIs
         self.card_inc.update_data(format_currency(inc, bc))
@@ -270,7 +273,7 @@ class PlannedPage(ctk.CTkFrame):
     def _handle_confirm(self, p):
         def do_confirm():
             if confirm_planned_payment(p.id):
-                Toast(self.master, "Payment confirmed & moved to Ledger", type="success")
+                Toast(self.winfo_toplevel(), "Payment confirmed & moved to Ledger", type="success")
                 self.refresh()
         ConfirmDialog(self.winfo_toplevel(), title="Confirm Payment",
                       message="This will move the payment to the main ledger as 'Confirmed'. Balance will not be updated until marked as 'Paid' there. Proceed?", 
@@ -279,7 +282,7 @@ class PlannedPage(ctk.CTkFrame):
     def _handle_delete(self, p):
         def do_delete():
             if delete_planned_payment(p.id):
-                Toast(self.master, "Planned payment deleted", type="success")
+                Toast(self.winfo_toplevel(), "Planned payment deleted", type="success")
                 self.refresh()
         ConfirmDialog(self.winfo_toplevel(), title="Delete Planned Payment",
                       message="Are you sure you want to delete this planned payment?", 

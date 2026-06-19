@@ -6,6 +6,7 @@ from ui.components.modal import Modal
 from services.planned_service import create_planned_payment
 from services.account_service import get_accounts
 from services.category_service import get_categories
+from services.project_service import get_projects
 from ui.components.toast import Toast
 from config import CURRENCIES
 
@@ -18,6 +19,7 @@ class AddPlannedModal(Modal):
         self.type_var = ctk.StringVar(value="expense")
         self.accounts = get_accounts(company_id)   # list of dicts
         self.categories = []
+        self.projects = get_projects(company_id, status_filter="active")
         self._build_ui()
 
     def _build_ui(self):
@@ -61,6 +63,10 @@ class AddPlannedModal(Modal):
 
         self.category_var = ctk.StringVar(value="Loading...")
         self.category_dropdown = self._dropdown_field("Category", self.category_var, ["Loading..."])
+
+        self.project_var = ctk.StringVar(value="— None —")
+        project_names = ["— None —"] + [p["name"] for p in self.projects] if self.projects else ["— None —"]
+        self.project_dropdown = self._dropdown_field("Project", self.project_var, project_names)
 
         # 2. Timing Section
         self._section_header("Schedule")
@@ -278,6 +284,12 @@ class AddPlannedModal(Modal):
             cat = self.cat_map.get(cat_name)
             if cat:
                 data["category_id"] = cat.id
+
+            proj_name = self.project_var.get()
+            if proj_name != "— None —":
+                proj = next((p for p in self.projects if p["name"] == proj_name), None)
+                if proj:
+                    data["project_id"] = proj["id"]
 
             create_planned_payment(data)
             Toast(self.master, "Planned payment added ✓", type="success")

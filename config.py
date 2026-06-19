@@ -3,7 +3,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 APP_NAME        = "KTIB Cash Flow"
 APP_VERSION     = "1.0.0"
-APP_BUILD_DATE  = "2025-01"
+APP_BUILD_DATE  = "2026-01"
 MIN_PYTHON      = (3, 11)
 
 import os

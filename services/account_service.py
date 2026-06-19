@@ -3,23 +3,86 @@ from database.models import Account, Transaction
 from sqlalchemy import func
 
 def create_account(data):
+    from services.currency_service import convert_to_base
+    from database.models import Company, Transaction
+    from datetime import datetime
+    
     with get_session() as session:
         account = Account(**data)
         session.add(account)
+        session.flush() # get ID
+        
+        # If created with a non-zero balance, create an initial transaction
+        if account.balance != 0:
+            company = session.get(Company, account.company_id)
+            base_curr = company.currency if company else "AZN"
+            abs_bal = abs(account.balance)
+            t_type = 'income' if account.balance > 0 else 'expense'
+            
+            base_amount = convert_to_base(abs_bal, account.currency, base_curr)
+            
+            txn = Transaction(
+                company_id=account.company_id,
+                account_id=account.id,
+                type=t_type,
+                amount=abs_bal,
+                currency=account.currency,
+                description="Initial Balance",
+                date=datetime.utcnow(),
+                status="paid",
+                base_amount=base_amount,
+                account_amount=abs_bal
+            )
+            session.add(txn)
+            
         session.commit()
         session.refresh(account)
         return account
 
 def update_account(account_id, new_data):
     """Updates an existing account's details."""
+    from services.currency_service import convert_to_base
+    from database.models import Company, Transaction
+    from datetime import datetime
+    from decimal import Decimal
+
     with get_session() as session:
         account = session.query(Account).filter(Account.id == account_id).first()
         if not account:
             return None
         
+        old_balance = account.balance
+        
         for k, v in new_data.items():
             if hasattr(account, k):
                 setattr(account, k, v)
+                
+        # If balance was changed manually, create an adjustment transaction
+        if 'balance' in new_data:
+            new_balance = Decimal(str(new_data['balance']))
+            diff = new_balance - Decimal(str(old_balance))
+            
+            if diff != 0:
+                company = session.get(Company, account.company_id)
+                base_curr = company.currency if company else "AZN"
+                abs_diff = abs(diff)
+                t_type = 'income' if diff > 0 else 'expense'
+                
+                base_amount = convert_to_base(abs_diff, account.currency, base_curr)
+                
+                txn = Transaction(
+                    company_id=account.company_id,
+                    account_id=account.id,
+                    type=t_type,
+                    amount=abs_diff,
+                    currency=account.currency,
+                    description="Manual Balance Adjustment",
+                    date=datetime.utcnow(),
+                    status="paid",
+                    base_amount=base_amount,
+                    account_amount=abs_diff
+                )
+                session.add(txn)
                 
         session.commit()
         session.refresh(account)

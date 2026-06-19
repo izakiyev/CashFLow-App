@@ -194,6 +194,8 @@ def get_transactions(company_id, filters=None, limit=None, offset=None):
                 )
             if filters.get('category_id') and filters['category_id'] != 'All':
                 query = query.filter(Transaction.category_id == filters['category_id'])
+            if filters.get('project_id') and filters['project_id'] != 'All':
+                query = query.filter(Transaction.project_id == filters['project_id'])
             if filters.get('status') and filters['status'] != 'All':
                 query = query.filter(Transaction.status == filters['status'].lower())
             if filters.get('search'):
@@ -224,6 +226,7 @@ def get_transactions(company_id, filters=None, limit=None, offset=None):
                 "account_name": t.account.name if t.account else "Unknown",
                 "to_account_id": t.to_account_id,
                 "category_id": t.category_id,
+                "project_id": t.project_id,
                 "type": t.type,
                 "amount": t.amount,
                 "currency": t.currency,
@@ -516,7 +519,10 @@ def get_dashboard_summary(company_id, date_from=None, date_to=None):
         base_currency = company.currency if company else "AZN"
 
         # Calculate normalized total balance (always real-time)
-        accounts = session.query(Account).filter(Account.company_id == company_id).all()
+        accounts = session.query(Account).filter(
+            Account.company_id == company_id,
+            Account.is_archived != True
+        ).all()
         total_balance = sum(float(convert_to_base(acc.balance, acc.currency, base_currency)) for acc in accounts)
 
         # Build period filter
@@ -599,6 +605,83 @@ def get_dashboard_summary(company_id, date_from=None, date_to=None):
             "savings_rate":    float(max(0, savings_rate))
         }
 
+def get_filtered_transactions_summary(company_id, filters=None):
+    from services.currency_service import convert_to_base
+    from database.models import Company, Category, Account
+
+    with get_session() as session:
+        if not company_id:
+            return {"total_income": 0.0, "total_expenses": 0.0, "net_profit": 0.0, "total_vat": 0.0, "base_currency": "AZN"}
+
+        company = session.get(Company, company_id)
+        base_currency = company.currency if company else "AZN"
+
+        query = session.query(Transaction.type, Transaction.amount, Transaction.currency, 
+                              Transaction.edv_amount, Transaction.base_amount, Transaction.base_edv_amount)\
+                       .filter(Transaction.company_id == company_id)
+
+        if filters:
+            if filters.get('type') and filters['type'] != 'All':
+                query = query.filter(Transaction.type == filters['type'].lower())
+            if filters.get('account_id') and filters['account_id'] != 'All':
+                query = query.filter(
+                    (Transaction.account_id == filters['account_id']) |
+                    (Transaction.to_account_id == filters['account_id'])
+                )
+            if filters.get('category_id') and filters['category_id'] != 'All':
+                query = query.filter(Transaction.category_id == filters['category_id'])
+            if filters.get('project_id') and filters['project_id'] != 'All':
+                query = query.filter(Transaction.project_id == filters['project_id'])
+            if filters.get('status') and filters['status'] != 'All':
+                query = query.filter(Transaction.status == filters['status'].lower())
+            if filters.get('search'):
+                term = f"%{filters['search']}%"
+                query = query.join(Category, Transaction.category_id == Category.id, isouter=True)\
+                             .join(Account, Transaction.account_id == Account.id)\
+                             .filter(
+                    Transaction.description.ilike(term) |
+                    Transaction.counterparty.ilike(term) |
+                    Category.name.ilike(term) |
+                    Account.name.ilike(term)
+                )
+            if filters.get('date_from') and filters.get('date_to'):
+                query = query.filter(
+                    Transaction.date >= filters['date_from'],
+                    Transaction.date <= filters['date_to']
+                )
+
+        txs = query.all()
+
+        total_income = Decimal("0.0")
+        total_expenses = Decimal("0.0")
+        total_vat = Decimal("0.0")
+
+        for t_type, t_amount, t_curr, t_edv, b_amt, b_edv in txs:
+            vat_norm = Decimal("0.0")
+            if b_amt is not None:
+                norm = Decimal(str(b_amt)) + Decimal(str(b_edv or 0))
+                vat_norm = Decimal(str(b_edv or 0))
+            else:
+                norm = convert_to_base(t_amount, t_curr, base_currency)
+                if t_edv:
+                    vat_norm = Decimal(str(t_edv))
+                    norm += vat_norm
+            
+            if t_type == 'income':
+                total_income += norm
+            elif t_type == 'expense':
+                total_expenses += norm
+
+            total_vat += vat_norm
+
+        return {
+            "total_income":    float(total_income),
+            "total_expenses":  float(total_expenses),
+            "net_profit":      float(total_income - total_expenses),
+            "total_vat":       float(total_vat),
+            "base_currency":   base_currency,
+        }
+
 
 def get_projected_balance(company_id):
     """Returns current balance minus all pending planned payments (converted to base currency)."""
@@ -609,7 +692,10 @@ def get_projected_balance(company_id):
         company = session.get(Company, company_id)
         base_currency = company.currency if company else "AZN"
 
-        accounts = session.query(Account).filter(Account.company_id == company_id).all()
+        accounts = session.query(Account).filter(
+            Account.company_id == company_id,
+            Account.is_archived != True
+        ).all()
         total_balance = sum(float(convert_to_base(acc.balance, acc.currency, base_currency)) for acc in accounts)
 
         pending = session.query(PlannedPayment).filter(

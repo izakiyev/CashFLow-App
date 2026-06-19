@@ -9,6 +9,7 @@ from ui.pages.planned_page import PlannedPage
 from ui.pages.reports_page import ReportsPage
 from ui.pages.categories_page import CategoriesPage
 from ui.pages.budgets_page import BudgetsPage
+from ui.pages.projects_page import ProjectsPage
 from ui.pages.settings_page import SettingsPage
 from ui.pages.ai_assistant_page import AIAssistantPage
 from ui.pages.setup_page import SetupWorkspaceScreen
@@ -141,6 +142,8 @@ class KTIBCashFlowApp(ctk.CTk):
             self.current_page = CategoriesPage(self.main_container, user["company_id"])
         elif page_name == "budgets":
             self.current_page = BudgetsPage(self.main_container, user["company_id"])
+        elif page_name == "projects":
+            self.current_page = ProjectsPage(self.main_container, user["company_id"])
         elif page_name == "settings":
             self.current_page = SettingsPage(self.main_container, user["company_id"],
                                              on_theme_change=self._on_theme_change)

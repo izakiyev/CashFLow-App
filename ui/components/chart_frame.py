@@ -9,7 +9,7 @@ class ChartFrame(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.canvas = None
-        self.figure = Figure(figsize=(5, 4), dpi=100)
+        self.figure = Figure(figsize=(5, 4), dpi=100, constrained_layout=True)
         # Apply theme background
         self._update_colors()
         
@@ -248,7 +248,6 @@ class ChartFrame(ctk.CTkFrame):
         if self.canvas:
             self.canvas.get_tk_widget().destroy()
             
-        self.figure.tight_layout()
         self.canvas = FigureCanvasTkAgg(self.figure, self)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(fill="both", expand=True)

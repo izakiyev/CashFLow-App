@@ -7,7 +7,6 @@ from ui.components.chart_frame import ChartFrame
 from ui.components.data_table import DataTable
 from services.transaction_service import get_dashboard_summary, get_monthly_series, get_daily_cashflow_series
 from services.report_service import get_pl_statement, get_vat_report, get_cash_flow_forecast, get_fx_gain_loss
-from services.ai_service import AIService
 from services.currency_service import format_currency
 from ui.utils.thread_worker import ThreadWorker
 from ui.components.toast import Toast
@@ -58,7 +57,6 @@ class CashFlowPage(ctk.CTkFrame):
     def __init__(self, master, company_id, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.company_id = company_id
-        self.ai_service = AIService(company_id=self.company_id)
         self._date_from, self._date_to = self._this_month()
         # Cache raw table data for export (instead of reading widget text)
         self._table_raw_data = []
@@ -78,7 +76,6 @@ class CashFlowPage(ctk.CTkFrame):
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
         self.scroll.pack(fill="both", expand=True, padx=20, pady=10)
 
-        self._build_ai_insights()
         self._build_kpis()
         self._build_chart()
         self._build_forecast()
@@ -114,12 +111,23 @@ class CashFlowPage(ctk.CTkFrame):
             btn.pack(side="left", padx=3)
             self._filter_buttons[label] = btn
 
+        btn_custom = ctk.CTkButton(
+            inner, text="Custom", height=28, font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"],
+            hover_color=THEME["border"],
+            text_color=THEME["text_primary"],
+            command=self._open_custom_date_modal
+        )
+        btn_custom.pack(side="left", padx=3)
+        self._filter_buttons["Custom"] = btn_custom
+
         self._range_lbl = ctk.CTkLabel(bar, text="", font=FONTS["small"], text_color=THEME["text_tertiary"])
         self._range_lbl.pack(side="right", padx=20)
         self._update_range_label()
 
     def _apply_preset(self, label):
-        self._date_from, self._date_to = self.PRESETS[label]()
+        if label != "Custom":
+            self._date_from, self._date_to = self.PRESETS[label]()
         for lbl, btn in self._filter_buttons.items():
             is_active = (lbl == label)
             btn.configure(
@@ -130,6 +138,15 @@ class CashFlowPage(ctk.CTkFrame):
         self._update_range_label()
         self.refresh()
 
+    def _open_custom_date_modal(self):
+        from ui.modals.custom_date import CustomDateModal
+        def on_custom_dates(d_from, d_to):
+            self._date_from = d_from
+            self._date_to = d_to
+            self._apply_preset("Custom")
+            
+        CustomDateModal(self.winfo_toplevel(), on_success=on_custom_dates)
+
     def _update_range_label(self):
         if self._date_from and self._date_to:
             self._range_lbl.configure(
@@ -139,22 +156,6 @@ class CashFlowPage(ctk.CTkFrame):
             self._range_lbl.configure(text="All Time")
 
     # ─── UI Build ─────────────────────────────────────────────────────────────
-
-    def _build_ai_insights(self):
-        self.ai_frame = ctk.CTkFrame(self.scroll, fg_color=THEME["bg_secondary"], corner_radius=12,
-                                     border_width=1, border_color=THEME["blue"])
-        self.ai_frame.pack(fill="x", pady=(0, 20), padx=6)
-
-        header = ctk.CTkFrame(self.ai_frame, fg_color="transparent")
-        header.pack(fill="x", padx=20, pady=(15, 5))
-
-        ctk.CTkLabel(header, text="✨ AI Financial Auditor", font=FONTS["heading"],
-                     text_color=THEME["blue"]).pack(side="left")
-
-        self.ai_text = ctk.CTkLabel(self.ai_frame, text="Analyzing your finances... 🤖",
-                                    font=FONTS["body"], text_color=THEME["text_secondary"],
-                                    justify="left", wraplength=1000)
-        self.ai_text.pack(fill="x", padx=20, pady=(0, 20), anchor="w")
 
     def _build_kpis(self):
         self.kpi_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
@@ -327,12 +328,6 @@ class CashFlowPage(ctk.CTkFrame):
     def refresh(self):
         if not self.company_id:
             return
-        # Only update AI text if the widget is visible
-        try:
-            if self.ai_frame.winfo_ismapped():
-                self.ai_text.configure(text="Analyzing your finances... 🤖")
-        except Exception:
-            pass
         ThreadWorker(self, self._fetch_data, on_success=self._update_ui)
 
     def _fetch_data(self):
@@ -375,16 +370,6 @@ class CashFlowPage(ctk.CTkFrame):
             "inc_cat_data": inc_cat_data,
         }
 
-    def _fetch_ai_insight(self, ai_summary):
-        return self.ai_service.get_financial_insights(ai_summary)
-
-    def _update_ai_insight(self, insights):
-        try:
-            if self.winfo_exists():
-                self.ai_text.configure(text=insights)
-        except Exception:
-            pass
-
     # ─── UI Update ────────────────────────────────────────────────────────────
 
     def _update_ui(self, data):
@@ -393,27 +378,6 @@ class CashFlowPage(ctk.CTkFrame):
                 return
         except Exception:
             return
-
-        # ── AI Insights (async, non-blocking) ──────────────────────────────
-        from services.company_service import get_company
-        comp = get_company(self.company_id)
-        ai_enabled = comp.get("ai_enabled", True) if comp else True
-
-        if ai_enabled:
-            self.ai_frame.pack(fill="x", pady=(0, 20), padx=6, before=self.kpi_frame)
-            summ_ai = data["summ"]
-            fx_ai   = data["fx"]
-            ai_summary = (
-                f"Total Income: {summ_ai['total_income']}, "
-                f"Expenses: {summ_ai['total_expenses']}, "
-                f"Net: {summ_ai['net_profit']}, "
-                f"FX Performance: {fx_ai['total_gain_loss']}, "
-                f"Top Expense: {summ_ai.get('top_expense_category', 'N/A')}"
-            )
-            ThreadWorker(self, lambda: self._fetch_ai_insight(ai_summary),
-                         on_success=self._update_ai_insight)
-        else:
-            self.ai_frame.pack_forget()
 
         # ── KPIs ───────────────────────────────────────────────────────────
         summ = data["summ"]

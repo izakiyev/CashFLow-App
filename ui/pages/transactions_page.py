@@ -4,12 +4,16 @@ from ui.theme import THEME, FONTS
 from ui.components.topbar import Topbar
 from ui.components.search_bar import SearchBar
 from ui.components.toast import Toast
+from ui.components.badge import Badge
+from ui.components.empty_state import EmptyState
+from ui.components.loading_state import LoadingState
 from ui.modals.add_transaction import AddTransactionModal
 from ui.modals.edit_transaction import EditTransactionModal
 from ui.modals.confirm_dialog import ConfirmDialog
-from services.transaction_service import get_transactions, delete_transaction, get_dashboard_summary, pay_transaction
+from services.transaction_service import get_transactions, delete_transaction, get_filtered_transactions_summary, pay_transaction
 from services.account_service import get_accounts
 from services.category_service import get_categories
+from services.project_service import get_projects
 from services.currency_service import format_currency
 from ui.utils.thread_worker import ThreadWorker
 import csv
@@ -98,21 +102,10 @@ class TransactionRow(ctk.CTkFrame):
             ctk.CTkLabel(amt_f, text=edv_txt, font=FONTS["small"],
                          text_color=THEME["text_tertiary"], anchor="e").pack(fill="x")
 
-        # Type badge
-        badge_f = ctk.CTkFrame(self, fg_color=self._badge_bg(tx['type']), corner_radius=6)
-        badge_f.pack(side="right", padx=10)
-        ctk.CTkLabel(badge_f, text=tx['type'].upper(), font=FONTS["small"],
-                     text_color=type_color).pack(padx=10, pady=3)
-
-        # Status badge
+        # Type + Status badges
         status = tx.get('status', 'confirmed')
-        status_color = THEME["green"] if status == 'paid' else THEME["amber"]
-        status_bg = THEME["green_light"] if status == 'paid' else THEME["amber_light"]
-
-        status_f = ctk.CTkFrame(self, fg_color=status_bg, corner_radius=6)
-        status_f.pack(side="right", padx=5)
-        ctk.CTkLabel(status_f, text=status.upper(), font=FONTS["small"],
-                     text_color=status_color).pack(padx=8, pady=3)
+        Badge(self, text=tx['type']).pack(side="right", padx=8)
+        Badge(self, text=status).pack(side="right", padx=4)
 
         # Hover binding
         for w in [self, indicator, info_f, desc_lbl]:
@@ -125,10 +118,10 @@ class TransactionRow(ctk.CTkFrame):
         return THEME["blue_light"]
 
     def _on_enter(self, _):
-        self.configure(fg_color=THEME["bg_tertiary"])
+        self.configure(fg_color=THEME["bg_tertiary"], border_color=THEME["blue"])
 
     def _on_leave(self, _):
-        self.configure(fg_color=THEME["bg_secondary"])
+        self.configure(fg_color=THEME["bg_secondary"], border_color=THEME["border"])
 
 
 class TransactionsPage(ctk.CTkFrame):
@@ -184,8 +177,8 @@ class TransactionsPage(ctk.CTkFrame):
 
         self.topbar = Topbar(self, title="Transactions")
         self.topbar.pack(fill="x")
-        self.topbar.add_action("Export CSV", self._export_csv)
-        self.topbar.add_action("+ New Transaction", self._add_transaction, primary=True)
+        self.topbar.add_action("⬇ Export CSV", self._export_csv)
+        self.topbar.add_action("+ New Transaction", self._add_transaction, primary=True, shortcut="Ctrl+N")
 
         self._build_date_filter()
         self._build_kpi_row()
@@ -212,26 +205,47 @@ class TransactionsPage(ctk.CTkFrame):
                 inner, text=label, height=28, font=FONTS["small"],
                 fg_color=THEME["blue"] if is_active else THEME["bg_tertiary"],
                 hover_color=THEME["blue"] if is_active else THEME["border"],
-                text_color=THEME["text_primary"],
+                text_color="white" if is_active else THEME["text_primary"],
                 command=lambda l=label: self._apply_preset(l)
             )
             btn.pack(side="left", padx=3)
             self._filter_buttons[label] = btn
+            
+        btn_custom = ctk.CTkButton(
+            inner, text="Custom", height=28, font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"],
+            hover_color=THEME["border"],
+            text_color=THEME["text_primary"],
+            command=self._open_custom_date_modal
+        )
+        btn_custom.pack(side="left", padx=3)
+        self._filter_buttons["Custom"] = btn_custom
 
         self._range_lbl = ctk.CTkLabel(bar, text="", font=FONTS["small"], text_color=THEME["text_tertiary"])
         self._range_lbl.pack(side="right", padx=20)
         self._update_range_label()
 
     def _apply_preset(self, label):
-        self._date_from, self._date_to = self.PRESETS[label]()
+        if label != "Custom":
+            self._date_from, self._date_to = self.PRESETS[label]()
         for lbl, btn in self._filter_buttons.items():
             is_active = (lbl == label)
             btn.configure(
                 fg_color=THEME["blue"] if is_active else THEME["bg_tertiary"],
-                hover_color=THEME["blue"] if is_active else THEME["border"]
+                hover_color=THEME["blue"] if is_active else THEME["border"],
+                text_color="white" if is_active else THEME["text_primary"]
             )
         self._update_range_label()
         self.refresh()
+
+    def _open_custom_date_modal(self):
+        from ui.modals.custom_date import CustomDateModal
+        def on_custom_dates(d_from, d_to):
+            self._date_from = d_from
+            self._date_to = d_to
+            self._apply_preset("Custom")
+            
+        CustomDateModal(self.winfo_toplevel(), on_success=on_custom_dates)
 
     def _update_range_label(self):
         if self._date_from and self._date_to:
@@ -242,23 +256,36 @@ class TransactionsPage(ctk.CTkFrame):
     # ─── Header KPIs ──────────────────────────────────────────────────────────
     def _build_kpi_row(self):
         row = ctk.CTkFrame(self, fg_color="transparent")
-        row.pack(fill="x", padx=20, pady=(10, 0))
-        for i in range(3):
+        row.pack(fill="x", padx=12, pady=(10, 0))
+        for i in range(4):
             row.grid_columnconfigure(i, weight=1)
 
-        def kpi_card(parent, title, col):
-            card = ctk.CTkFrame(parent, fg_color=THEME["bg_secondary"], corner_radius=10,
-                                border_width=1, border_color=THEME["border"])
-            card.grid(row=0, column=col, sticky="ew", padx=5)
-            ctk.CTkLabel(card, text=title, font=FONTS["body"], text_color=THEME["text_secondary"]
-                         ).pack(anchor="w", padx=16, pady=(10, 0))
-            lbl_v = ctk.CTkLabel(card, text="₼0.00", font=FONTS["title"], text_color=THEME["text_primary"])
-            lbl_v.pack(anchor="w", padx=16, pady=(0, 12))
+        def kpi_card(parent, title, icon_char, color_main, color_light, col):
+            card = ctk.CTkFrame(parent, fg_color=THEME["bg_secondary"], corner_radius=12,
+                                border_width=1, border_color=THEME["border"], height=88)
+            card.grid(row=0, column=col, sticky="ew", padx=8)
+            card.pack_propagate(False)
+            
+            icon_bg = ctk.CTkFrame(card, width=46, height=46, corner_radius=12, fg_color=color_light)
+            icon_bg.pack(side="left", padx=(16, 12), pady=21)
+            icon_bg.pack_propagate(False)
+            
+            ctk.CTkLabel(icon_bg, text=icon_char, font=("Inter", 20, "bold"), text_color=color_main).place(relx=0.5, rely=0.5, anchor="center")
+            
+            text_frame = ctk.CTkFrame(card, fg_color="transparent")
+            text_frame.pack(side="left", fill="both", expand=True, pady=(18, 0))
+            
+            ctk.CTkLabel(text_frame, text=title, font=FONTS["small"], text_color=THEME["text_secondary"]
+                         ).pack(anchor="w")
+            lbl_v = ctk.CTkLabel(text_frame, text="₼0.00", font=("Inter", 22, "bold"), text_color=THEME["text_primary"])
+            lbl_v.pack(anchor="w", pady=(0, 0))
+            
             return lbl_v
 
-        self.kpi_income  = kpi_card(row, "Total Income",   0)
-        self.kpi_expense = kpi_card(row, "Total Expenses", 1)
-        self.kpi_net     = kpi_card(row, "Net",            2)
+        self.kpi_income  = kpi_card(row, "Filtered Income",   "↑", THEME["green"], THEME["green_light"], 0)
+        self.kpi_expense = kpi_card(row, "Filtered Expenses", "↓", THEME["red"], THEME["red_light"], 1)
+        self.kpi_net     = kpi_card(row, "Filtered Net",      "=", THEME["blue"], THEME["blue_light"], 2)
+        self.kpi_vat     = kpi_card(row, "Filtered VAT",      "%", THEME["amber"], THEME["amber_light"], 3)
 
     # ─── Filter bar ───────────────────────────────────────────────────────────
     def _build_filter_bar(self):
@@ -277,9 +304,9 @@ class TransactionsPage(ctk.CTkFrame):
                                       text_color=THEME["text_tertiary"])
         self.count_lbl.pack(side="right", padx=8)
 
-        # ── Row 2: Type + Status + Account + Clear ────────────────────────────
+        # ── Row 2: Type + Status ──────────────────────────────────────────────
         row2 = ctk.CTkFrame(bar, fg_color="transparent")
-        row2.pack(fill="x", padx=12, pady=(0, 10))
+        row2.pack(fill="x", padx=12, pady=(0, 4))
 
         ctk.CTkLabel(row2, text="Type:", font=FONTS["small"],
                      text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
@@ -294,25 +321,12 @@ class TransactionsPage(ctk.CTkFrame):
         ctk.CTkLabel(row2, text="Status:", font=FONTS["small"],
                      text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
         self.status_seg = ctk.CTkSegmentedButton(
-            row2, values=["All", "Paid", "Confirmed"],
+            row2, values=["All", "Paid", "Confirmed", "Pending", "Qaime Gözleyir"],
             command=self._on_status_filter, font=FONTS["small"],
             height=28
         )
         self.status_seg.set("All")
         self.status_seg.pack(side="left", padx=(0, 16))
-
-        ctk.CTkLabel(row2, text="Account:", font=FONTS["small"],
-                     text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
-        self.account_menu = ctk.CTkOptionMenu(
-            row2, values=["All Accounts"], font=FONTS["small"],
-            fg_color=THEME["bg_tertiary"], button_color=THEME["border"],
-            button_hover_color=THEME["border"], text_color=THEME["text_primary"],
-            dropdown_fg_color=THEME["bg_secondary"],
-            height=28, width=140,
-            command=self._on_account_filter
-        )
-        self.account_menu.pack(side="left", padx=(0, 16))
-        self._account_id_map = {}  # label -> id
 
         ctk.CTkLabel(row2, text="Category:", font=FONTS["small"],
                      text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
@@ -326,6 +340,19 @@ class TransactionsPage(ctk.CTkFrame):
         )
         self.category_menu.pack(side="left", padx=(0, 16))
         self._category_id_map = {}  # label -> id
+
+        ctk.CTkLabel(row2, text="Project:", font=FONTS["small"],
+                     text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 4))
+        self.project_menu = ctk.CTkOptionMenu(
+            row2, values=["All Projects"], font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"], button_color=THEME["border"],
+            button_hover_color=THEME["border"], text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["bg_secondary"],
+            height=28, width=140,
+            command=self._on_project_filter
+        )
+        self.project_menu.pack(side="left", padx=(0, 16))
+        self._project_id_map = {}  # label -> id
 
         self.clear_btn = ctk.CTkButton(
             row2, text="✕ Clear Filters", height=28, font=FONTS["small"],
@@ -439,13 +466,20 @@ class TransactionsPage(ctk.CTkFrame):
             self.filters['category_id'] = self._category_id_map.get(label)
         self.refresh()
 
+    def _on_project_filter(self, label):
+        if label == "All Projects":
+            self.filters.pop('project_id', None)
+        else:
+            self.filters['project_id'] = self._project_id_map.get(label)
+        self.refresh()
+
     def _clear_filters(self):
         self.filters = {}
         self.search_bar.clear()
         self.type_seg.set("All")
         self.status_seg.set("All")
-        self.account_menu.set("All Accounts")
         self.category_menu.set("All Categories")
+        self.project_menu.set("All Projects")
         self.refresh()
 
     def _prompt_delete(self, tx_id):
@@ -488,11 +522,8 @@ class TransactionsPage(ctk.CTkFrame):
         for w in self.rows_scroll.winfo_children():
             w.destroy()
         # Show loading indicator
-        self._loading_lbl = ctk.CTkLabel(
-            self.rows_scroll, text="Loading transactions...",
-            font=FONTS["body"], text_color=THEME["text_tertiary"]
-        )
-        self._loading_lbl.pack(pady=40)
+        self._loading_state = LoadingState(self.rows_scroll)
+        self._loading_state.pack(pady=50)
 
         ThreadWorker(self, self._fetch_data, on_success=self._update_ui)
 
@@ -519,24 +550,18 @@ class TransactionsPage(ctk.CTkFrame):
         f = self._build_active_filters()
         accounts = get_accounts(self.company_id)
         categories = get_categories(self.company_id)
+        projects = get_projects(self.company_id, status_filter="active")
         accounts_map = {a['id']: a['name'] for a in accounts}
 
-        # Cache KPI Summary to avoid recalculating on every keystroke
-        d_from = f.get('date_from')
-        d_to = f.get('date_to')
-        if not self._cached_summ or self._cached_summ_dates != (d_from, d_to):
-            self._cached_summ = get_dashboard_summary(
-                self.company_id,
-                date_from=d_from,
-                date_to=d_to
-            )
-            self._cached_summ_dates = (d_from, d_to)
+        # Compute KPIs based on ALL active filters
+        self._cached_summ = get_filtered_transactions_summary(self.company_id, f)
 
         txs = get_transactions(self.company_id, f, limit=PAGE_SIZE, offset=0)
         return {
             "accounts_map": accounts_map, 
             "accounts": accounts, 
             "categories": categories,
+            "projects": projects,
             "summ": self._cached_summ, 
             "txs": txs
         }
@@ -558,24 +583,6 @@ class TransactionsPage(ctk.CTkFrame):
         # Update accounts map
         self._accounts_map = data["accounts_map"]
 
-        # Populate account dropdown on first load (or if accounts changed)
-        accounts = data.get("accounts", [])
-        if accounts:
-            self._account_id_map = {a['name']: a['id'] for a in accounts}
-            labels = ["All Accounts"] + list(self._account_id_map.keys())
-            current = self.account_menu.get()
-            self.account_menu.configure(values=labels)
-            
-            # If we navigated here with an initial filter, set it
-            active_acc_id = self.filters.get('account_id')
-            if active_acc_id:
-                for label, acc_id in self._account_id_map.items():
-                    if acc_id == active_acc_id:
-                        self.account_menu.set(label)
-                        break
-            elif current not in labels:
-                self.account_menu.set("All Accounts")
-
         # Populate category dropdown
         categories = data.get("categories", [])
         if categories:
@@ -595,6 +602,23 @@ class TransactionsPage(ctk.CTkFrame):
             if current not in labels:
                 self.category_menu.set("All Categories")
 
+        # Populate project dropdown
+        projects = data.get("projects", [])
+        if projects:
+            self._project_id_map = {p['name']: p['id'] for p in projects}
+            labels = ["All Projects"] + sorted(self._project_id_map.keys())
+            current = self.project_menu.get()
+            self.project_menu.configure(values=labels)
+            
+            active_proj_id = self.filters.get('project_id')
+            if active_proj_id:
+                for label, p_id in self._project_id_map.items():
+                    if p_id == active_proj_id:
+                        self.project_menu.set(label)
+                        break
+            elif current not in labels:
+                self.project_menu.set("All Projects")
+
         # Update KPIs (date-filtered)
         summ = data["summ"]
         bc = summ.get('base_currency', 'AZN')
@@ -603,6 +627,8 @@ class TransactionsPage(ctk.CTkFrame):
         net = summ['net_profit']
         self.kpi_net.configure(text=format_currency(net, bc),
                                text_color=THEME["green"] if net >= 0 else THEME["red"])
+        vat = summ.get('total_vat', 0.0)
+        self.kpi_vat.configure(text=format_currency(vat, bc), text_color=THEME["amber"])
 
         # Clear rows (including any loading label)
         for w in self.rows_scroll.winfo_children():
@@ -614,8 +640,13 @@ class TransactionsPage(ctk.CTkFrame):
         self.count_lbl.configure(text=f"{len(txs)} transaction{'s' if len(txs) != 1 else ''} loaded")
 
         if not txs:
-            ctk.CTkLabel(self.rows_scroll, text="No transactions found for this period.",
-                         font=FONTS["body"], text_color=THEME["text_tertiary"]).pack(pady=40)
+            empty = EmptyState(
+                self.rows_scroll,
+                icon="📋",
+                title="No transactions found",
+                subtitle="Try adjusting your filters or date range."
+            )
+            empty.pack(fill="both", expand=True, pady=20)
             return
 
         def _on_done():
@@ -681,13 +712,16 @@ class TransactionsPage(ctk.CTkFrame):
         _render_chunk(0)
 
     def _show_load_more_btn(self):
-        """Render a 'Load More' button at the bottom of the list."""
+        """Render a styled 'Load More' button at the bottom of the list."""
         self._load_more_btn = ctk.CTkButton(
             self.rows_scroll,
-            text=f"Load More  (showing {self._current_offset}, click for next {PAGE_SIZE})",
-            height=40, font=FONTS["body"],
-            fg_color=THEME["bg_tertiary"], hover_color=THEME["border"],
-            text_color=THEME["text_primary"],
+            text=f"↓  Load More  ({self._current_offset} loaded)",
+            height=40, font=("Inter", 13, "bold"),
+            fg_color=THEME["bg_secondary"],
+            hover_color=THEME["bg_tertiary"],
+            text_color=THEME["blue"],
+            border_width=1, border_color=THEME["border"],
+            corner_radius=8,
             command=self._load_more
         )
-        self._load_more_btn.pack(fill="x", padx=10, pady=(8, 16))
+        self._load_more_btn.pack(fill="x", padx=20, pady=(8, 20))

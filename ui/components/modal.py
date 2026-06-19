@@ -1,40 +1,74 @@
 import customtkinter as ctk
 from ui.theme import THEME, FONTS
 
+
 class Modal(ctk.CTkToplevel):
-    def __init__(self, master, title="Modal", width=480, height=580, **kwargs):
+    """
+    Premium base modal:
+      - Colored top accent bar
+      - Bold title + subtitle
+      - Styled ✕ close button
+      - Escape to close
+    """
+
+    def __init__(self, master, title="Modal", subtitle=None,
+                 width=480, height=580, accent_color=None, **kwargs):
         super().__init__(master, **kwargs)
         self.title(title)
         self.geometry(f"{width}x{height}")
         self.configure(fg_color=THEME["bg_primary"])
         self.resizable(False, False)
-
         self.transient(master)
         self.grab_set()
 
-        # Center modal
+        # Center on parent
         self.update_idletasks()
-        x = master.winfo_x() + (master.winfo_width() // 2) - (width // 2)
+        x = master.winfo_x() + (master.winfo_width()  // 2) - (width  // 2)
         y = master.winfo_y() + (master.winfo_height() // 2) - (height // 2)
         self.geometry(f"+{x}+{y}")
 
         self.bind("<Escape>", lambda e: self.destroy())
 
-        # Header
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=20, pady=20)
+        # ── Top accent bar ────────────────────────────────────────────────────
+        accent = accent_color or THEME["blue"]
+        ctk.CTkFrame(self, height=3, corner_radius=0,
+                     fg_color=accent).pack(fill="x", side="top")
 
-        lbl_title = ctk.CTkLabel(header, text=title, font=FONTS["title"], text_color=THEME["text_primary"])
-        lbl_title.pack(side="left")
+        # ── Header ────────────────────────────────────────────────────────────
+        header = ctk.CTkFrame(self, fg_color=THEME["bg_secondary"],
+                               corner_radius=0, height=60)
+        header.pack(fill="x")
+        header.pack_propagate(False)
 
-        btn_close = ctk.CTkButton(header, text="X", width=30, height=30, fg_color="transparent",
-                                  hover_color=THEME["bg_secondary"], text_color=THEME["text_secondary"],
-                                  command=self.destroy)
-        btn_close.pack(side="right")
+        title_col = ctk.CTkFrame(header, fg_color="transparent")
+        title_col.pack(side="left", padx=20, fill="y")
 
-        # Content frame
+        ctk.CTkLabel(title_col, text=title, font=("Inter", 16, "bold"),
+                     text_color=THEME["text_primary"]).pack(anchor="w", pady=(12, 0))
+        if subtitle:
+            ctk.CTkLabel(title_col, text=subtitle, font=FONTS["small"],
+                         text_color=THEME["text_tertiary"]).pack(anchor="w")
+
+        # Close button
+        close_btn = ctk.CTkButton(
+            header, text="✕", width=32, height=32,
+            corner_radius=16,
+            fg_color="transparent",
+            hover_color=THEME["bg_tertiary"],
+            text_color=THEME["text_tertiary"],
+            font=("Inter", 14, "bold"),
+            command=self.destroy)
+        close_btn.pack(side="right", padx=16, pady=14)
+
+        # ── Divider ───────────────────────────────────────────────────────────
+        ctk.CTkFrame(self, height=1, fg_color=THEME["border"],
+                     corner_radius=0).pack(fill="x")
+
+        # ── Content area ──────────────────────────────────────────────────────
         self.content_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.content_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        self.content_frame.pack(fill="both", expand=True, padx=24, pady=20)
+
+    # ── Safe helpers ──────────────────────────────────────────────────────────
 
     def focus_set(self):
         try:
@@ -44,7 +78,6 @@ class Modal(ctk.CTkToplevel):
             pass
 
     def destroy(self):
-        """Override destroy to safely return focus and avoid TclErrors."""
         try:
             self.grab_release()
             if self.master and self.master.winfo_exists():
@@ -53,6 +86,5 @@ class Modal(ctk.CTkToplevel):
         except Exception:
             pass
         finally:
-            # Delay actual destruction slightly to allow CustomTkinter's after() callbacks to fire
             if self.winfo_exists():
                 self.after(10, super().destroy)

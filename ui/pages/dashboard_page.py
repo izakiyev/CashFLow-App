@@ -15,6 +15,8 @@ from services.planned_service import get_planned_payments, confirm_planned_payme
 from services.budget_service import get_budget_summary
 from services.currency_service import format_currency
 from ui.utils.thread_worker import ThreadWorker
+from ui.components.empty_state import EmptyState
+from ui.components.loading_state import LoadingState
 
 
 
@@ -180,7 +182,7 @@ class DashboardPage(ctk.CTkFrame):
 
         self.topbar = Topbar(self, title="Dashboard")
         self.topbar.pack(fill="x")
-        self.topbar.add_action("+ New Transaction", self._add_transaction, primary=True)
+        self.topbar.add_action("+ New Transaction", self._add_transaction, primary=True, shortcut="Ctrl+N")
 
         self._build_date_filter()
 
@@ -219,6 +221,16 @@ class DashboardPage(ctk.CTkFrame):
             btn.pack(side="left", padx=3)
             self._filter_buttons[label] = btn
 
+        btn_custom = ctk.CTkButton(
+            inner, text="Custom", height=28, font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"],
+            hover_color=THEME["border"],
+            text_color=THEME["text_primary"],
+            command=self._open_custom_date_modal
+        )
+        btn_custom.pack(side="left", padx=3)
+        self._filter_buttons["Custom"] = btn_custom
+
         # Live range display
         self._range_lbl = ctk.CTkLabel(bar, text="", font=FONTS["small"],
                                         text_color=THEME["text_tertiary"])
@@ -226,7 +238,8 @@ class DashboardPage(ctk.CTkFrame):
         self._update_range_label()
 
     def _apply_preset(self, label):
-        self._date_from, self._date_to = self.PRESETS[label]()
+        if label != "Custom":
+            self._date_from, self._date_to = self.PRESETS[label]()
         # Update button highlights using the dict (fix #9)
         for lbl, btn in self._filter_buttons.items():
             is_active = (lbl == label)
@@ -237,6 +250,15 @@ class DashboardPage(ctk.CTkFrame):
             )
         self._update_range_label()
         self.refresh()
+
+    def _open_custom_date_modal(self):
+        from ui.modals.custom_date import CustomDateModal
+        def on_custom_dates(d_from, d_to):
+            self._date_from = d_from
+            self._date_to = d_to
+            self._apply_preset("Custom")
+            
+        CustomDateModal(self.winfo_toplevel(), on_success=on_custom_dates)
 
     def _update_range_label(self):
         if self._date_from and self._date_to:
@@ -270,16 +292,16 @@ class DashboardPage(ctk.CTkFrame):
         self.kpi_frame.pack(fill="x", pady=(0, 12))
         for i in range(4): self.kpi_frame.grid_columnconfigure(i, weight=1)
 
-        self.card_balance = KPICard(self.kpi_frame, "Total Balance", "₼0.00")
+        self.card_balance = KPICard(self.kpi_frame, "Total Balance", "₼0.00", accent_color=THEME["blue"])
         self.card_balance.grid(row=0, column=0, sticky="ew", padx=6)
 
-        self.card_income = KPICard(self.kpi_frame, "Income (Period)", "₼0.00")
+        self.card_income = KPICard(self.kpi_frame, "Income (Period)", "₼0.00", accent_color=THEME["green"])
         self.card_income.grid(row=0, column=1, sticky="ew", padx=6)
 
-        self.card_expense = KPICard(self.kpi_frame, "Expenses (Period)", "₼0.00")
+        self.card_expense = KPICard(self.kpi_frame, "Expenses (Period)", "₼0.00", accent_color=THEME["red"])
         self.card_expense.grid(row=0, column=2, sticky="ew", padx=6)
 
-        self.card_net = KPICard(self.kpi_frame, "Net Profit (Period)", "₼0.00")
+        self.card_net = KPICard(self.kpi_frame, "Net Profit (Period)", "₼0.00", accent_color=THEME["amber"])
         self.card_net.grid(row=0, column=3, sticky="ew", padx=6)
 
         # Row 2: analytics + projected balance
@@ -287,20 +309,20 @@ class DashboardPage(ctk.CTkFrame):
         self.stat_frame.pack(fill="x", pady=(0, 12))
         for i in range(5): self.stat_frame.grid_columnconfigure(i, weight=1)
 
-        self.card_top_cat = KPICard(self.stat_frame, "Top Category", "None")
+        self.card_top_cat = KPICard(self.stat_frame, "Top Category", "None", accent_color="#8B5CF6")
         self.card_top_cat.grid(row=0, column=0, sticky="ew", padx=6)
 
-        self.card_avg_spend = KPICard(self.stat_frame, "Avg Daily Spend", "₼0.00")
+        self.card_avg_spend = KPICard(self.stat_frame, "Avg Daily Spend", "₼0.00", accent_color=THEME["red"])
         self.card_avg_spend.grid(row=0, column=1, sticky="ew", padx=6)
 
-        self.card_savings = KPICard(self.stat_frame, "Savings Rate", "0%")
+        self.card_savings = KPICard(self.stat_frame, "Savings Rate", "0%", accent_color=THEME["green"])
         self.card_savings.grid(row=0, column=2, sticky="ew", padx=6)
 
-        self.card_budget = KPICard(self.stat_frame, "Budget Health", "…")
+        self.card_budget = KPICard(self.stat_frame, "Budget Health", "…", accent_color=THEME["amber"])
         self.card_budget.grid(row=0, column=3, sticky="ew", padx=6)
 
         # Feature #2: Projected Balance card
-        self.card_projected = KPICard(self.stat_frame, "Projected Balance", "₼0.00")
+        self.card_projected = KPICard(self.stat_frame, "Projected Balance", "₼0.00", accent_color=THEME["blue"])
         self.card_projected.grid(row=0, column=4, sticky="ew", padx=6)
 
     def _build_charts_section(self):
@@ -412,6 +434,13 @@ class DashboardPage(ctk.CTkFrame):
 
     def refresh(self):
         if not self.company_id: return
+        
+        # Show loading states for lists
+        for container in [self.acc_list, self.tx_list, self.up_list]:
+            for w in container.winfo_children():
+                w.destroy()
+            LoadingState(container).pack(fill="both", expand=True, pady=20)
+            
         ThreadWorker(self, self._fetch_data, on_success=self._update_ui)
 
     def _fetch_data(self):
@@ -551,8 +580,9 @@ class DashboardPage(ctk.CTkFrame):
                                      currency=acc['currency'], height=56)
                 row.pack(fill="x", padx=6, pady=3)
         else:
-            ctk.CTkLabel(self.acc_list, text="No accounts found.", font=FONTS["body"],
-                         text_color=THEME["text_tertiary"]).pack(pady=20)
+            EmptyState(self.acc_list, icon="🏦",
+                       title="No accounts",
+                       subtitle="Add an account to get started.").pack(fill="both", expand=True)
 
         # Feature #4: Currency Exposure breakdown
         for w in self.exposure_frame.winfo_children(): w.destroy()
@@ -573,8 +603,9 @@ class DashboardPage(ctk.CTkFrame):
                 row = TxMiniRow(self.tx_list, tx, on_click=self._open_tx_edit, height=56)
                 row.pack(fill="x", padx=6, pady=4)
         else:
-            ctk.CTkLabel(self.tx_list, text="No recent transactions.", font=FONTS["body"],
-                         text_color=THEME["text_tertiary"]).pack(pady=40)
+            EmptyState(self.tx_list, icon="💳",
+                       title="No recent transactions",
+                       subtitle="Transactions for this period will appear here.").pack(fill="both", expand=True)
 
         # 5. Planned List
         for w in self.up_list.winfo_children(): w.destroy()
@@ -584,8 +615,9 @@ class DashboardPage(ctk.CTkFrame):
                 row = PlannedMiniRow(self.up_list, p, self._mark_paid, height=56)
                 row.pack(fill="x", padx=6, pady=4)
         else:
-            ctk.CTkLabel(self.up_list, text="No upcoming payments.", font=FONTS["body"],
-                         text_color=THEME["text_tertiary"]).pack(pady=40)
+            EmptyState(self.up_list, icon="📅",
+                       title="No upcoming payments",
+                       subtitle="All planned payments are up to date.").pack(fill="both", expand=True)
 
     # ── Navigation helpers (Feature #3) ────────────────────────────────────────
     def _go_transactions(self):

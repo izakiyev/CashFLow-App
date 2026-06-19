@@ -8,6 +8,8 @@ from ui.components.chart_frame import ChartFrame
 from ui.modals.confirm_dialog import ConfirmDialog
 from ui.components.toast import Toast
 from ui.utils.thread_worker import ThreadWorker
+from ui.components.empty_state import EmptyState
+from ui.components.loading_state import LoadingState
 
 ACCOUNT_TYPES = ["All", "Bank", "Cash", "Credit Card", "Investment", "Other"]
 
@@ -232,11 +234,8 @@ class AccountsPage(ctk.CTkFrame):
         for w in self.cards_frame.winfo_children():
             w.destroy()
             
-        self._loading_lbl = ctk.CTkLabel(
-            self.cards_frame, text="Loading accounts...",
-            font=FONTS["body"], text_color=THEME["text_tertiary"]
-        )
-        self._loading_lbl.grid(row=0, column=0, columnspan=2, pady=40)
+        self._loading_state = LoadingState(self.cards_frame, text="Loading accounts...")
+        self._loading_state.grid(row=0, column=0, columnspan=2, pady=40)
         
         ThreadWorker(self, self._fetch_data, on_success=self._update_ui)
 
@@ -284,8 +283,9 @@ class AccountsPage(ctk.CTkFrame):
             w.destroy()
 
         if not filtered:
-            ctk.CTkLabel(self.cards_frame, text="No accounts found.",
-                         font=FONTS["body"], text_color=THEME["text_tertiary"]).grid(
+            EmptyState(self.cards_frame, icon="🏦", 
+                       title="No accounts found", 
+                       subtitle="Try adjusting your filters or search query.").grid(
                              row=0, column=0, columnspan=2, pady=40)
         else:
             row, col = 0, 0
@@ -308,7 +308,8 @@ class AccountsPage(ctk.CTkFrame):
         # ── Donut chart: only positive-balance active accounts ──
         positive = [a for a in accounts if a["balance"] > 0 and not a.get("is_archived")]
         if positive:
-            chart_data = [{"name": a["name"], "amount": a["balance"], "color": a["color"] or THEME["blue"]}
+            from services.currency_service import convert_to_base
+            chart_data = [{"name": a["name"], "amount": float(convert_to_base(a["balance"], a["currency"], bc)), "color": a["color"] or THEME["blue"]}
                           for a in positive]
             self.chart.draw_donut_chart(chart_data)
         else:

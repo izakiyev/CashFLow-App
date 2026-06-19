@@ -8,6 +8,8 @@ from ui.modals.edit_category import EditCategoryModal
 from ui.modals.confirm_dialog import ConfirmDialog
 from ui.components.toast import Toast
 from ui.utils.thread_worker import ThreadWorker
+from ui.components.empty_state import EmptyState
+from ui.components.loading_state import LoadingState
 
 class CategoryCard(ctk.CTkFrame):
     def __init__(self, master, category, on_edit, on_delete, is_sub=False, **kwargs):
@@ -150,15 +152,13 @@ class CategoriesPage(ctk.CTkFrame):
         sep = ctk.CTkFrame(col_frame, height=1, fg_color=THEME["border"])
         sep.pack(fill="x", padx=20, pady=(0, 10))
         
-        # Loading / Status label
-        lbl = ctk.CTkLabel(col_frame, text="", font=FONTS["body"], text_color=THEME["text_tertiary"])
-        lbl.pack(pady=5)
+        # Loading State component created dynamically when needed
 
         # Scrollable area for cards
         scroll = ctk.CTkScrollableFrame(col_frame, fg_color="transparent")
         scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
         
-        return scroll, lbl
+        return scroll, col_frame
 
     def refresh(self):
         if not self.company_id: return
@@ -171,10 +171,15 @@ class CategoriesPage(ctk.CTkFrame):
             for w in scroll.winfo_children(): 
                 w.destroy()
                 
-        self.inc_lbl.configure(text="Loading...", height=20)
-        self.inc_lbl.pack(pady=5)
-        self.exp_lbl.configure(text="Loading...", height=20)
-        self.exp_lbl.pack(pady=5)
+        if hasattr(self, '_loading_states'):
+            for ls in self._loading_states:
+                ls.destroy()
+        self._loading_states = []
+        for col_frame in [self.inc_lbl, self.exp_lbl]: # these are now the col_frames
+            ls = LoadingState(col_frame, text="Loading categories...")
+            ls.pack(pady=20)
+            self._loading_states.append(ls)
+            
         self.count_lbl.configure(text="Searching...")
 
         ThreadWorker(self, self._fetch_data, on_success=self._update_ui)
@@ -189,13 +194,15 @@ class CategoriesPage(ctk.CTkFrame):
             if not self.winfo_exists(): return
         except Exception: return
 
-        self.inc_lbl.pack_forget()
-        self.exp_lbl.pack_forget()
+        if hasattr(self, '_loading_states'):
+            for ls in self._loading_states:
+                ls.destroy()
+        self._loading_states = []
 
         total_visible = 0
 
-        for scroll, t_filter, raw_cats, lbl in [(self.col_inc, "income", data["income"], self.inc_lbl), 
-                                                (self.col_exp, "expense", data["expense"], self.exp_lbl)]:
+        for scroll, t_filter, raw_cats in [(self.col_inc, "income", data["income"]), 
+                                                (self.col_exp, "expense", data["expense"])]:
             
             # Apply search filter
             filtered_cats = []
@@ -218,8 +225,10 @@ class CategoriesPage(ctk.CTkFrame):
                 filtered_cats = raw_cats
 
             if not filtered_cats:
-                lbl.configure(text="No categories found.", height=20)
-                lbl.pack(pady=20)
+                empty = EmptyState(scroll, icon="🗂️", 
+                                   title="No categories found", 
+                                   subtitle="Try a different search or add a new one.")
+                empty.pack(fill="both", expand=True, pady=40)
                 continue
                 
             total_visible += len(filtered_cats)

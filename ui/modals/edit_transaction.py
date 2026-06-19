@@ -6,6 +6,7 @@ from ui.components.modal import Modal
 from services.transaction_service import get_transaction, update_transaction
 from services.account_service import get_accounts
 from services.category_service import get_categories
+from services.project_service import get_projects
 from services.company_service import get_company
 from services.currency_service import convert_to_base
 from ui.components.toast import Toast
@@ -20,6 +21,7 @@ class EditTransactionModal(Modal):
         
         self.accounts = get_accounts(company_id)
         self.categories = []
+        self.projects = get_projects(company_id, status_filter="active")
         
         company = get_company(company_id)
         self.base_currency = company['currency'] if company else "AZN"
@@ -95,6 +97,15 @@ class EditTransactionModal(Modal):
                                                    values=["Loading..."], font=FONTS["body"])
         self.category_dropdown.pack(side="left", fill="x", expand=True)
 
+        # Project row
+        self.project_row = ctk.CTkFrame(self.form_frame, fg_color="transparent")
+        ctk.CTkLabel(self.project_row, text="Project", width=110, anchor="w", font=FONTS["body"]).pack(side="left")
+        self.project_var = ctk.StringVar(value="— None —")
+        project_names = ["— None —"] + [p["name"] for p in self.projects] if self.projects else ["— None —"]
+        self.project_dropdown = ctk.CTkOptionMenu(self.project_row, variable=self.project_var,
+                                                  values=project_names, font=FONTS["body"])
+        self.project_dropdown.pack(side="left", fill="x", expand=True)
+
         # To Account (transfer)
         self.to_acc_row = ctk.CTkFrame(self.form_frame, fg_color="transparent")
         ctk.CTkLabel(self.to_acc_row, text="To Account", width=110, anchor="w", font=FONTS["body"]).pack(side="left")
@@ -113,7 +124,7 @@ class EditTransactionModal(Modal):
                      font=FONTS["body"]).pack(side="left")
         self.status_var = ctk.StringVar(value="confirmed")
         self.status_dropdown = ctk.CTkOptionMenu(self.status_row, variable=self.status_var,
-                                                 values=["paid", "confirmed", "pending"], font=FONTS["body"])
+                                                 values=["paid", "confirmed", "pending", "Qaime Gözleyir"], font=FONTS["body"])
         self.status_dropdown.pack(side="left", fill="x", expand=True)
 
         self.note_entry = self._field("Note (opt.)", "Any additional info")
@@ -186,7 +197,10 @@ class EditTransactionModal(Modal):
                 self.edv_account_var.set(e_acc['name'])
         
         if self.tx.get('status'):
-            self.status_var.set(self.tx['status'])
+            s = self.tx['status']
+            if s == "qaime gözleyir":
+                s = "Qaime Gözleyir"
+            self.status_var.set(s)
         
         if self.tx.get('currency'):
             self.currency_var.set(self.tx['currency'])
@@ -205,6 +219,12 @@ class EditTransactionModal(Modal):
             display_name = next((name for name, c in self.cat_map.items() if c.id == self.tx['category_id']), None)
             if display_name:
                 self.category_var.set(display_name)
+        
+        # Project
+        if self.tx.get('project_id'):
+            proj = next((p for p in self.projects if p["id"] == self.tx['project_id']), None)
+            if proj:
+                self.project_var.set(proj["name"])
 
     def _field(self, label, placeholder="", value=""):
         row = ctk.CTkFrame(self.form_frame, fg_color="transparent")
@@ -227,6 +247,7 @@ class EditTransactionModal(Modal):
             self.btn_income.configure(fg_color=THEME["green"], text_color="white")
             self.submit_btn.configure(fg_color=THEME["green"], hover_color=THEME["green_dark"])
             self.cat_row.pack(fill="x", pady=5, after=self.acc_row)
+            self.project_row.pack(fill="x", pady=5, after=self.cat_row)
             self.to_acc_row.pack_forget()
             self.edv_row.pack(fill="x", pady=5)
             self.edv_acc_row.pack(fill="x", pady=5)
@@ -235,6 +256,7 @@ class EditTransactionModal(Modal):
             self.btn_expense.configure(fg_color=THEME["red"], text_color="white")
             self.submit_btn.configure(fg_color=THEME["red"], hover_color="#a02020")
             self.cat_row.pack(fill="x", pady=5, after=self.acc_row)
+            self.project_row.pack(fill="x", pady=5, after=self.cat_row)
             self.to_acc_row.pack_forget()
             self.edv_row.pack(fill="x", pady=5)
             self.edv_acc_row.pack(fill="x", pady=5)
@@ -243,6 +265,7 @@ class EditTransactionModal(Modal):
             self.btn_transfer.configure(fg_color=THEME["blue"], text_color="white")
             self.submit_btn.configure(fg_color=THEME["blue"], hover_color=THEME["blue_light"])
             self.cat_row.pack_forget()
+            self.project_row.pack_forget()
             self.edv_row.pack_forget()
             self.edv_acc_row.pack_forget()
             self.to_acc_row.pack(fill="x", pady=5, after=self.acc_row)
@@ -310,8 +333,9 @@ class EditTransactionModal(Modal):
                 "note": self.note_entry.get().strip(),
                 "account_id": acc['id'],
                 "category_id": None,
+                "project_id": None,
                 "to_account_id": None,
-                "status": self.status_var.get(),
+                "status": self.status_var.get().lower(),
                 "currency": self.currency_var.get(),
                 "edv_amount": 0,
                 "edv_account_id": None
@@ -344,6 +368,11 @@ class EditTransactionModal(Modal):
                 cat_name = self.category_var.get()
                 cat = self.cat_map.get(cat_name)
                 if cat: data["category_id"] = cat.id
+
+                proj_name = self.project_var.get()
+                if proj_name != "— None —":
+                    proj = next((p for p in self.projects if p["name"] == proj_name), None)
+                    if proj: data["project_id"] = proj["id"]
 
             update_transaction(self.tx_id, data)
             Toast(self.master, "Transaction updated ✓", type="success")

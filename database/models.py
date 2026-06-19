@@ -72,6 +72,9 @@ class Company(Base):
     planned     = relationship("PlannedPayment",
                                back_populates="company",
                                cascade="all, delete-orphan")
+    projects    = relationship("Project",
+                               back_populates="company",
+                               cascade="all, delete-orphan")
 
 class Account(Base):
     __tablename__ = "accounts"
@@ -111,6 +114,9 @@ class Transaction(Base):
                              nullable=True)   # transfers only
     category_id     = Column(Integer,
                              ForeignKey("categories.id"),
+                             nullable=True)
+    project_id      = Column(Integer,
+                             ForeignKey("projects.id", ondelete="SET NULL"),
                              nullable=True)
     type            = Column(String(20), nullable=False)
     # MONEY: CentsInteger eliminates float rounding errors
@@ -152,6 +158,8 @@ class Transaction(Base):
                                    foreign_keys=[edv_account_id])
     category        = relationship("Category",
                                    back_populates="transactions")
+    project         = relationship("Project", back_populates="transactions",
+                                   foreign_keys=[project_id])
     __table_args__ = (
         Index("ix_transactions_company_date", "company_id", "date"),
         Index("ix_transactions_type", "type"),
@@ -199,6 +207,9 @@ class PlannedPayment(Base):
     category_id     = Column(Integer,
                              ForeignKey("categories.id"),
                              nullable=True)
+    project_id      = Column(Integer,
+                             ForeignKey("projects.id", ondelete="SET NULL"),
+                             nullable=True)
     type            = Column(String(20), nullable=False)
     # MONEY: CentsInteger eliminates float rounding errors
     amount          = Column(CentsInteger, nullable=False)
@@ -221,6 +232,8 @@ class PlannedPayment(Base):
     account         = relationship("Account", foreign_keys=[account_id])
     edv_account     = relationship("Account", foreign_keys=[edv_account_id])
     category        = relationship("Category")
+    project         = relationship("Project", back_populates="planned_payments",
+                                   foreign_keys=[project_id])
     __table_args__ = (
         Index("ix_planned_company_due", "company_id", "due_date"),
     )
@@ -245,4 +258,31 @@ class Budget(Base):
 
     __table_args__ = (
         Index("ix_budgets_lookup", "company_id", "category_id", "year", "month"),
+    )
+
+
+class Project(Base):
+    __tablename__ = "projects"
+    id          = Column(Integer, primary_key=True)
+    company_id  = Column(Integer,
+                         ForeignKey("companies.id", ondelete="CASCADE"),
+                         nullable=False)
+    name        = Column(String(200), nullable=False)
+    description = Column(Text, default="")
+    color       = Column(String(10), default="#2970ff")
+    # MONEY: CentsInteger — nullable means no budget cap
+    budget      = Column(CentsInteger, nullable=True)
+    start_date  = Column(DateTime, nullable=True)
+    end_date    = Column(DateTime, nullable=True)
+    status      = Column(String(20), default="active")  # active | completed | archived
+    created_at  = Column(DateTime, default=datetime.utcnow)
+
+    company         = relationship("Company", back_populates="projects")
+    transactions    = relationship("Transaction", back_populates="project",
+                                   foreign_keys="Transaction.project_id")
+    planned_payments = relationship("PlannedPayment", back_populates="project",
+                                    foreign_keys="PlannedPayment.project_id")
+
+    __table_args__ = (
+        Index("ix_projects_company", "company_id"),
     )

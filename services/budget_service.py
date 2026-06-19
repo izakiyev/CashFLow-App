@@ -60,6 +60,15 @@ def get_budgets(company_id, month=None, year=None, period_type="monthly"):
         # We need to map children to parents for aggregation
         cat_map = {c.id: c for c in categories}
         actual_spending = {c.id: Decimal("0.0") for c in categories}
+        budgeted_amounts = {c.id: Decimal("0.0") for c in categories}
+        
+        # Calculate budgeted amounts (including rollups)
+        for cat in categories:
+            b = budget_map.get(cat.id)
+            if b:
+                budgeted_amounts[cat.id] += b.amount
+                if cat.parent_id and cat.parent_id in budgeted_amounts:
+                    budgeted_amounts[cat.parent_id] += b.amount
         
         for tx in txs:
             if not tx.category_id: continue
@@ -92,7 +101,7 @@ def get_budgets(company_id, month=None, year=None, period_type="monthly"):
                 "category_color": cat.color,
                 "parent_id": cat.parent_id,
                 "budget_id": b.id if b else None,
-                "budgeted_amount": float(b.amount) if b else 0.0,
+                "budgeted_amount": float(budgeted_amounts[cat.id]),
                 "actual_amount": float(actual_spending[cat.id]),
                 "currency": base_currency
             })

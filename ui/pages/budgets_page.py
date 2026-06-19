@@ -5,6 +5,8 @@ from datetime import datetime
 from ui.components.toast import Toast
 from ui.modals.edit_budget import EditBudgetModal
 from ui.utils.thread_worker import ThreadWorker
+from ui.components.empty_state import EmptyState
+from ui.components.loading_state import LoadingState
 
 class BudgetsPage(ctk.CTkFrame):
     def __init__(self, master, company_id, **kwargs):
@@ -63,9 +65,8 @@ class BudgetsPage(ctk.CTkFrame):
         self.list_wrapper = ctk.CTkFrame(self, fg_color="transparent")
         self.list_wrapper.pack(fill="both", expand=True, padx=20, pady=0)
         
-        # Loading State Label
-        self.loading_lbl = ctk.CTkLabel(self.list_wrapper, text="", font=FONTS["body"], text_color=THEME["text_tertiary"])
-        self.loading_lbl.pack(pady=40)
+        # Loading State component created dynamically when needed
+
 
         self.scroll = ctk.CTkScrollableFrame(self.list_wrapper, fg_color="transparent")
         self.scroll.pack(fill="both", expand=True)
@@ -92,8 +93,10 @@ class BudgetsPage(ctk.CTkFrame):
         self._add_summary_card(self.summary_frame, "Remaining", "...", THEME["text_tertiary"])
         
         self.scroll.pack_forget()
-        self.loading_lbl.configure(text="Loading budgets...")
-        self.loading_lbl.pack(pady=40)
+        if hasattr(self, '_loading_state'):
+            self._loading_state.destroy()
+        self._loading_state = LoadingState(self.list_wrapper, text="Loading budgets...")
+        self._loading_state.pack(pady=40)
 
         ThreadWorker(self, self._fetch_data, on_success=self._update_ui)
 
@@ -107,7 +110,8 @@ class BudgetsPage(ctk.CTkFrame):
             if not self.winfo_exists(): return
         except Exception: return
 
-        self.loading_lbl.pack_forget()
+        if hasattr(self, '_loading_state'):
+            self._loading_state.destroy()
         self.scroll.pack(fill="both", expand=True)
 
         for widget in self.summary_frame.winfo_children(): widget.destroy()
@@ -119,17 +123,36 @@ class BudgetsPage(ctk.CTkFrame):
         self._add_summary_card(self.summary_frame, "Remaining", f"{summary['remaining']:,.2f}", THEME["green"])
 
         budgets = data["budgets"]
-        if not budgets:
-            ctk.CTkLabel(self.scroll, text="No budgets configured.", font=FONTS["body"], text_color=THEME["text_tertiary"]).pack(pady=40)
+
+        # Only show rows that are meaningful: have a budget set OR have actual spending
+        visible = [b for b in budgets if b['budgeted_amount'] > 0 or b['actual_amount'] > 0]
+
+        if not visible:
+            EmptyState(self.scroll, icon="📊",
+                       title="No activity this period",
+                       subtitle="No expenses or budgets found for the selected period. Set a budget or add transactions to get started.").pack(fill="both", expand=True, pady=40)
             return
 
-        # Group by parent
-        parents = [b for b in budgets if b['parent_id'] is None]
-        children = [b for b in budgets if b['parent_id'] is not None]
-        
+        # Group by parent, only rendering parents that are themselves visible
+        # or that have visible children
+        children = [b for b in visible if b['parent_id'] is not None]
+        child_parent_ids = {c['parent_id'] for c in children}
+
+        parents = [b for b in visible if b['parent_id'] is None]
+        # Also include parents that have visible children even if they themselves have 0/0
+        all_parent_ids = {p['category_id'] for p in parents}
+        for b in budgets:
+            if b['parent_id'] is None and b['category_id'] in child_parent_ids and b['category_id'] not in all_parent_ids:
+                parents.append(b)
+                all_parent_ids.add(b['category_id'])
+
+        # Sort parents by actual spending descending for better UX
+        parents.sort(key=lambda x: x['actual_amount'], reverse=True)
+
         for p in parents:
             self._add_budget_item(self.scroll, p)
             p_children = [c for c in children if c['parent_id'] == p['category_id']]
+            p_children.sort(key=lambda x: x['actual_amount'], reverse=True)
             for c in p_children:
                 self._add_budget_item(self.scroll, c, is_sub=True)
 
@@ -169,20 +192,32 @@ class BudgetsPage(ctk.CTkFrame):
         
         budgeted = data['budgeted_amount']
         actual = data['actual_amount']
-        percent = (actual / budgeted) if budgeted > 0 else 0
+        has_budget = budgeted > 0
+        percent = (actual / budgeted) if has_budget else (1.0 if actual > 0 else 0)
         
         # Progress Bar
         bar_frame = ctk.CTkFrame(controls, fg_color="transparent")
         bar_frame.pack(side="left", padx=20)
         
-        bar_color = THEME["red"] if percent > 1 else (THEME["yellow"] if percent > 0.8 else THEME["green"])
+        if not has_budget and actual > 0:
+            # Unbudgeted spending — show solid red bar as a warning
+            bar_color = THEME["red"]
+        else:
+            bar_color = THEME["red"] if percent > 1 else (THEME["amber"] if percent > 0.8 else THEME["green"])
         
         progress = ctk.CTkProgressBar(bar_frame, width=200, height=8, fg_color=THEME["bg_tertiary"], progress_color=bar_color)
         progress.set(min(1.0, percent))
         progress.pack()
         
-        ctk.CTkLabel(bar_frame, text=f"{actual:,.0f} / {budgeted:,.0f} {data['currency']}", 
-                     font=FONTS["small"], text_color=THEME["text_tertiary"]).pack()
+        if has_budget:
+            label_text = f"{actual:,.0f} / {budgeted:,.0f} {data['currency']}"
+            label_color = THEME["red"] if percent > 1 else THEME["text_tertiary"]
+        else:
+            label_text = f"{actual:,.0f} {data['currency']}  —  No budget set"
+            label_color = THEME["red"]
+        
+        ctk.CTkLabel(bar_frame, text=label_text,
+                     font=FONTS["small"], text_color=label_color).pack()
 
         # Edit Button
         ctk.CTkButton(controls, text="Set Budget", width=80, height=28, font=FONTS["small"],

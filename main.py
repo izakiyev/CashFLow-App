@@ -2,8 +2,12 @@ import sys
 import os
 import shutil
 import logging
+import warnings
 from tkinter import messagebox
 from datetime import datetime
+
+# Suppress non-critical matplotlib layout warnings (e.g. tight_layout with external legends)
+warnings.filterwarnings("ignore", category=UserWarning, module="matplotlib")
 
 # Ensure app directory is in the python path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
