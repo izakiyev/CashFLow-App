@@ -4,6 +4,8 @@ matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 from ui.theme import DARK, LIGHT
+import warnings
+warnings.filterwarnings("ignore", message="constrained_layout not applied.*")
 
 class ChartFrame(ctk.CTkFrame):
     def __init__(self, master, **kwargs):
@@ -33,9 +35,10 @@ class ChartFrame(ctk.CTkFrame):
         bg_color = LIGHT["bg_secondary"] if mode == "light" else DARK["bg_secondary"]
         self.figure.patch.set_facecolor(bg_color)
         
-    def draw_bar_chart(self, x_labels, data_series):
+    def draw_bar_chart(self, x_labels, data_series, series_colors=None, is_expanded=False):
         """
         data_series: dict of name -> list of values
+        series_colors: optional dict of name -> color hex string
         e.g. {"Income": [10, 20], "Expense": [5, 15]}
         """
         self._update_colors()
@@ -46,40 +49,119 @@ class ChartFrame(ctk.CTkFrame):
         theme_ref = LIGHT if mode == "light" else DARK
         ax.set_facecolor(theme_ref["bg_secondary"])
         
-        x = range(len(x_labels))
-        width = 0.35
+        x = list(range(len(x_labels)))
+        n = len(data_series)
+        width = 0.7 / max(n, 1)
         
-        offset = -width/2
-        # Use theme colors for default series if not specified
-        colors = {"Income": theme_ref["green"], "Expense": theme_ref["red"]}
-        
-        for name, values in data_series.items():
-            color = self._get_color(colors.get(name, theme_ref["blue"]))
-            ax.bar([pos + offset for pos in x], values, width, label=name, color=color)
-            offset += width
+        # Default color mapping, plus caller-supplied overrides
+        default_colors = {
+            "Income": theme_ref["green"],
+            "Expense": theme_ref["red"],
+        }
+        if series_colors:
+            default_colors.update(series_colors)
+
+        offsets = [i * width - (n * width / 2) + width / 2 for i in range(n)]
+
+        max_val = max([max(v) if v else 0 for v in data_series.values()]) if data_series else 0
+        pad = max_val * 0.015
+
+        for (name, values), offset in zip(data_series.items(), offsets):
+            color = self._get_color(default_colors.get(name, theme_ref["blue"]))
+            
+            # Premium bar styling: touch edges but separated by background-colored stroke
+            lw = 1.5 if is_expanded else 1.0
+            bars = ax.bar([pos + offset for pos in x], values, width,
+                          label=name, color=color, edgecolor=theme_ref["bg_secondary"], 
+                          linewidth=lw, alpha=0.95, zorder=3)
+                          
+            # Value labels on top of bars
+            for bar in bars:
+                h = bar.get_height()
+                if h > 0:
+                    label_text = self._currency_formatter(h, None)
+                    label_font = 10 if is_expanded else 7
+                    ax.text(bar.get_x() + bar.get_width() / 2, h + pad,
+                            label_text, ha='center', va='bottom',
+                            fontsize=label_font, fontweight='medium', 
+                            color=theme_ref["text_secondary"], zorder=4)
             
         ax.set_xticks(x)
-        ax.set_xticklabels(x_labels, color=theme_ref["text_primary"], fontsize=8)
-        ax.tick_params(colors=theme_ref["text_primary"], labelsize=8)
+        ax.set_xticklabels(x_labels, color=theme_ref["text_primary"], 
+                           fontsize=(11 if is_expanded else 9), fontweight='semibold')
+        ax.tick_params(colors=theme_ref["text_tertiary"], labelsize=(9 if is_expanded else 8))
         
         import matplotlib.ticker as ticker
         ax.yaxis.set_major_formatter(ticker.FuncFormatter(self._currency_formatter))
         
-        # Spines formatting
+        # Increase Y-axis limit slightly so top labels don't clip
+        if max_val > 0:
+            ax.set_ylim(0, max_val * 1.1)
+        
         for spine in ['top', 'right', 'left']:
             ax.spines[spine].set_visible(False)
-        for spine in ['bottom']:
-            ax.spines[spine].set_color(theme_ref["border"])
+        ax.spines['bottom'].set_color(theme_ref["border"])
             
-        ax.grid(axis='y', color=theme_ref["border"], linestyle='--', alpha=0.5)
+        ax.grid(axis='y', color=theme_ref["border"], linestyle='--', alpha=0.3, zorder=0)
             
         if data_series:
-            ax.legend(facecolor=theme_ref["bg_secondary"], edgecolor=theme_ref["border"], 
-                      labelcolor=theme_ref["text_primary"], fontsize='small')
+            leg_font = 12 if is_expanded else 'small'
+            ax.legend(loc='upper right', bbox_to_anchor=(1, 1.15), ncol=len(data_series),
+                      frameon=False, labelcolor=theme_ref["text_secondary"], fontsize=leg_font,
+                      handletextpad=0.4, handlelength=1.2)
             
         self._render()
 
-    def draw_line_chart(self, days, values, label, color=None):
+    def draw_horizontal_bar_chart(self, labels, values, colors=None, title=None, is_expanded=False):
+        """
+        Draws a horizontal bar chart.
+        labels: list of category names
+        values: list of numeric values
+        colors: list of hex color strings (optional)
+        """
+        import matplotlib.ticker as ticker
+        self._update_colors()
+        self.figure.clear()
+        ax = self.figure.add_subplot(111)
+
+        mode = ctk.get_appearance_mode().lower()
+        theme_ref = LIGHT if mode == "light" else DARK
+        ax.set_facecolor(theme_ref["bg_secondary"])
+
+        n = len(labels)
+        y_pos = list(range(n))
+
+        bar_colors = [self._get_color(c) for c in colors] if colors else [self._get_color(theme_ref["blue"])] * n
+
+        bars = ax.barh(y_pos, values, color=bar_colors, alpha=0.85, zorder=3, height=0.6)
+
+        # Value labels at end of each bar
+        for bar, val in zip(bars, values):
+            ax.text(bar.get_width() + max(values) * 0.01, bar.get_y() + bar.get_height() / 2,
+                    self._currency_formatter(val, None),
+                    va='center', ha='left', fontsize=8,
+                    color=theme_ref["text_primary"])
+
+        ax.set_yticks(y_pos)
+        ax.set_yticklabels(labels, color=theme_ref["text_primary"], fontsize=9)
+        ax.tick_params(colors=theme_ref["text_primary"], labelsize=8)
+        ax.xaxis.set_major_formatter(ticker.FuncFormatter(self._currency_formatter))
+        ax.invert_yaxis()  # Largest at top
+
+        for spine in ['top', 'right', 'bottom']:
+            ax.spines[spine].set_visible(False)
+        ax.spines['left'].set_color(theme_ref["border"])
+
+        ax.grid(axis='x', color=theme_ref["border"], linestyle='--', alpha=0.4, zorder=0)
+        ax.set_xlim(0, max(values) * 1.18 if values else 1)
+
+        if title:
+            ax.set_title(title, color=theme_ref["text_primary"], fontsize=10, pad=8)
+
+        self._render()
+
+
+    def draw_line_chart(self, days, values, label, color=None, is_expanded=False):
         """
         days: list of x-axis values (e.g., ["May 07", "May 08"...])
         values: list of cumulative totals
@@ -132,7 +214,7 @@ class ChartFrame(ctk.CTkFrame):
             
         self._render()
 
-    def draw_multi_line_chart(self, x_labels, data_series, colors=None):
+    def draw_multi_line_chart(self, x_labels, data_series, colors=None, is_expanded=False):
         """
         Flexible multi-line area chart. Accepts two formats:
         Format A (dict-of-dicts): {"Income": {"values": [10, 20], "color": "#hex"}, ...}
@@ -156,23 +238,39 @@ class ChartFrame(ctk.CTkFrame):
         self.line_data = []
 
         for i, (name, series_info) in enumerate(data_series.items()):
-            # Handle both Format A and Format B
             if isinstance(series_info, dict):
                 values = series_info.get("values", [])
                 color = self._get_color(series_info.get("color", colors[i % len(colors)]))
             else:
-                values = series_info  # plain list
+                values = series_info
                 color = self._get_color(colors[i % len(colors)])
 
-            ax.plot(x, values, color=color, linewidth=2.5, marker='o', markersize=4, 
-                    markeredgecolor=theme_ref["bg_secondary"], markeredgewidth=1, label=name)
-            ax.fill_between(x, values, color=color, alpha=0.15)
+            # Enhanced line and marker styling for a premium look
+            lw = 3.5 if is_expanded else 2.5
+            ms = 7 if is_expanded else 5
+            mew = 2 if is_expanded else 1.5
+            
+            ax.plot(x, values, color=color, linewidth=lw, marker='o', markersize=ms, 
+                    markeredgecolor=theme_ref["bg_secondary"], markeredgewidth=mew, label=name, zorder=4)
+            
+            # Subtle area fill
+            ax.fill_between(x, values, color=color, alpha=0.12, zorder=3)
             self.line_data.append({"name": name, "x": x, "y": values})
 
-        ax.set_xticks(x)
-        ax.set_xticklabels(x_labels, color=theme_ref["text_tertiary"], fontsize=8)
-        ax.xaxis.set_major_locator(ticker.MaxNLocator(nbins=10))
-        ax.tick_params(colors=theme_ref["text_tertiary"], labelsize=8)
+        # Fix: Show labels correctly without MaxNLocator overriding string labels
+        max_ticks = 12 if is_expanded else 8
+        if len(x) > max_ticks:
+            step = max(1, len(x) // max_ticks)
+            tick_positions = x[::step]
+            tick_labels = [x_labels[i] for i in tick_positions]
+        else:
+            tick_positions = x
+            tick_labels = x_labels
+            
+        ax.set_xticks(tick_positions)
+        ax.set_xticklabels(tick_labels, color=theme_ref["text_tertiary"], fontsize=(10 if is_expanded else 8), fontweight='medium')
+        
+        ax.tick_params(colors=theme_ref["text_tertiary"], labelsize=(9 if is_expanded else 8))
         ax.yaxis.set_major_formatter(ticker.FuncFormatter(self._currency_formatter))
 
         for spine in ['top', 'right', 'left']:
@@ -180,7 +278,7 @@ class ChartFrame(ctk.CTkFrame):
         for spine in ['bottom']:
             ax.spines[spine].set_color(theme_ref["border"])
 
-        ax.grid(axis='y', color=theme_ref["border"], linestyle='--', alpha=0.5)
+        ax.grid(axis='y', color=theme_ref["border"], linestyle='--', alpha=0.3, zorder=0)
 
         if data_series:
             ax.legend(loc='upper right', bbox_to_anchor=(1, 1.15), ncol=len(data_series),
@@ -199,24 +297,28 @@ class ChartFrame(ctk.CTkFrame):
 
         self._render()
 
-    def draw_donut_chart(self, data, on_click=None):
+    def draw_donut_chart(self, data, on_click=None, is_expanded=False):
         """
         data: list of dicts {"id": 1, "name": "Sales", "amount": 1000, "color": "#hex"}
         on_click: optional callback(category_dict) triggered when a wedge is clicked.
         """
         self._donut_on_click = on_click
-        self.donut_data = data
-        self._update_colors()
-        self.figure.clear()
-        ax = self.figure.add_subplot(111)
+        # Sort data descending by amount to keep largest slices at the top
+        self.donut_data = sorted(data, key=lambda x: x.get("amount", 0), reverse=True)
         
         mode = ctk.get_appearance_mode().lower()
         theme_ref = LIGHT if mode == "light" else DARK
+        
+        self._update_colors()
+        self.figure.clear()
+        
+        # We add the subplot normally
+        ax = self.figure.add_subplot(111)
         ax.set_facecolor(theme_ref["bg_secondary"])
         
-        labels = [d["name"] for d in data]
-        sizes = [d["amount"] for d in data]
-        colors = [self._get_color(d["color"]) for d in data]
+        labels = [d["name"] for d in self.donut_data]
+        sizes = [d["amount"] for d in self.donut_data]
+        colors = [self._get_color(d["color"]) for d in self.donut_data]
         
         if not sizes or sum(sizes) == 0:
             ax.text(0.5, 0.5, "No Data", ha="center", va="center", color=theme_ref["text_secondary"])
@@ -224,8 +326,38 @@ class ChartFrame(ctk.CTkFrame):
         else:
             self.wedges, texts = ax.pie(sizes, colors=colors, startangle=90, 
                                         wedgeprops=dict(width=0.35, edgecolor=theme_ref["bg_secondary"], linewidth=2))
-            ax.legend(self.wedges, labels, loc="center left", bbox_to_anchor=(1, 0, 0.5, 1),
-                      frameon=False, labelcolor=theme_ref["text_primary"], fontsize='small')
+            
+            num_items = len(labels)
+            
+            # Smart UI/UX scaling for legend to ensure pie chart remains large and all items are visible
+            if num_items <= 8:
+                ncol = 1
+                f_size = 12 if is_expanded else 'small'
+                max_len = 35 if is_expanded else 22
+            elif num_items <= 16:
+                ncol = 2
+                f_size = 12 if is_expanded else 'small'
+                max_len = 25 if is_expanded else 12
+            elif num_items <= 24:
+                ncol = 2
+                f_size = 11 if is_expanded else 'x-small'
+                max_len = 20 if is_expanded else 14
+            elif num_items <= 36:
+                ncol = 3
+                f_size = 10 if is_expanded else 7
+                max_len = 16 if is_expanded else 9
+            else:
+                ncol = 3
+                f_size = 9 if is_expanded else 6
+                max_len = 14 if is_expanded else 8
+                
+            # Truncate labels based on columns so legend doesn't expand infinitely
+            legend_labels = [lbl[:max_len] + ".." if len(lbl) > max_len+1 else lbl for lbl in labels]
+
+            ax.legend(self.wedges, legend_labels, loc="center left", bbox_to_anchor=(1, 0.5),
+                      frameon=False, labelcolor=theme_ref["text_primary"], 
+                      fontsize=f_size, ncol=ncol, borderaxespad=0.1, 
+                      columnspacing=0.8, handletextpad=0.4, handlelength=1.2)
                       
             self.donut_labels = labels
             self.donut_sizes = sizes
@@ -234,13 +366,13 @@ class ChartFrame(ctk.CTkFrame):
                                                ec=theme_ref["border"], lw=1, alpha=0.95),
                                      arrowprops=dict(arrowstyle="-|>", connectionstyle="arc3,rad=0", 
                                                      color=theme_ref["text_secondary"]),
-                                     color=theme_ref["text_primary"], fontsize=9, zorder=100)
+                                     color=theme_ref["text_primary"], fontsize=(14 if is_expanded else 9), zorder=100)
             self.annot.set_visible(False)
             
             # Show cursor pointer hint if clickable
             if on_click:
-                ax.set_title("Click a slice to drill down", fontsize=7, 
-                             color=theme_ref["text_tertiary"], pad=4)
+                ax.set_title("Click a slice to drill down", fontsize=(12 if is_expanded else 7), 
+                             color=theme_ref["text_tertiary"], pad=(10 if is_expanded else 4))
                       
         self._render()
 
@@ -250,7 +382,9 @@ class ChartFrame(ctk.CTkFrame):
             
         self.canvas = FigureCanvasTkAgg(self.figure, self)
         self.canvas.draw()
+        
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
+            
         self.canvas.mpl_connect("motion_notify_event", self._on_hover)
         self.canvas.mpl_connect("button_press_event", self._on_click_handler)
 

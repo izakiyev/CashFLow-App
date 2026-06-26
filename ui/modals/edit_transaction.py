@@ -91,9 +91,9 @@ class EditTransactionModal(Modal):
 
         # Category
         self.cat_row = ctk.CTkFrame(self.form_frame, fg_color="transparent")
-        ctk.CTkLabel(self.cat_row, text="Category", width=110, anchor="w", font=FONTS["body"]).pack(side="left")
+        ctk.CTkLabel(self.cat_row, text="Client / Category", width=110, anchor="w", font=FONTS["body"]).pack(side="left")
         self.category_var = ctk.StringVar(value="Loading...")
-        self.category_dropdown = ctk.CTkOptionMenu(self.cat_row, variable=self.category_var,
+        self.category_dropdown = ctk.CTkComboBox(self.cat_row, variable=self.category_var,
                                                    values=["Loading..."], font=FONTS["body"])
         self.category_dropdown.pack(side="left", fill="x", expand=True)
 
@@ -365,9 +365,18 @@ class EditTransactionModal(Modal):
                 if to_acc['id'] == acc['id']: raise ValueError("Transfer destination must be different from source")
                 data["to_account_id"] = to_acc['id']
             else:
-                cat_name = self.category_var.get()
-                cat = self.cat_map.get(cat_name)
-                if cat: data["category_id"] = cat.id
+                cat_name = self.category_var.get().strip()
+                if cat_name and cat_name != "— None —":
+                    cat = self.cat_map.get(cat_name)
+                    if not cat:
+                        matches = [c for name, c in self.cat_map.items() if cat_name.lower() in name.lower()]
+                        if len(matches) == 1:
+                            cat = matches[0]
+                        elif len(matches) > 1:
+                            raise ValueError(f"'{cat_name}' matches multiple clients. Please select one from the list.")
+                        else:
+                            raise ValueError(f"Client '{cat_name}' not found.")
+                    data["category_id"] = cat.id
 
                 proj_name = self.project_var.get()
                 if proj_name != "— None —":

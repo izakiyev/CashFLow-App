@@ -42,7 +42,7 @@ class ThreadWorker:
             # Check if master widget still exists before scheduling
             if self.master.winfo_exists():
                 self.master.after(0, lambda: self._execute_if_alive(callback, *args))
-        except (AttributeError, RuntimeError, ctk.TclError):
+        except Exception:
             pass
 
     def _execute_if_alive(self, callback, *args):
@@ -50,5 +50,5 @@ class ThreadWorker:
         try:
             if self.master.winfo_exists():
                 callback(*args)
-        except (AttributeError, RuntimeError, ctk.TclError):
+        except Exception:
             pass

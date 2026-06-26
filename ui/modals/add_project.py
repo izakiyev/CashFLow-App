@@ -16,7 +16,10 @@ class AddProjectModal(Modal):
         self._build()
 
     def _build(self):
-        content = self.content_frame
+        # Allow extra room, but make it scrollable if it doesn't fit
+        scroll = ctk.CTkScrollableFrame(self.content_frame, fg_color="transparent")
+        scroll.pack(fill="both", expand=True)
+        content = scroll
 
         # Name
         ctk.CTkLabel(content, text="Project Name *", font=FONTS["body"],

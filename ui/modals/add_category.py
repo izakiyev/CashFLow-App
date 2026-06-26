@@ -8,7 +8,7 @@ import re
 
 class AddCategoryModal(Modal):
     def __init__(self, master, company_id, type_filter, on_success, **kwargs):
-        super().__init__(master, title=f"New {type_filter.capitalize()} Category", width=450, height=620, **kwargs)
+        super().__init__(master, title=f"New {type_filter.capitalize()} Client / Category", width=450, height=620, **kwargs)
         self.company_id = company_id
         self.type_filter = type_filter
         self.on_success = on_success
@@ -42,8 +42,8 @@ class AddCategoryModal(Modal):
         # Icon
         self.icon_entry = self._add_field("Icon", placeholder="Optional icon name")
         
-        # Parent Category
-        row = self._create_row("Parent")
+        # Parent Client
+        row = self._create_row("Client")
         parent_names = ["— None —"] + [c.name for c in self.parents]
         self.parent_dropdown = ctk.CTkOptionMenu(row, variable=self.parent_var, values=parent_names, font=FONTS["body"])
         self.parent_dropdown.pack(side="left", fill="x", expand=True)
@@ -95,7 +95,7 @@ class AddCategoryModal(Modal):
                                    command=self.destroy)
         btn_cancel.pack(side="left", expand=True, padx=5)
         
-        btn_submit = ctk.CTkButton(footer, text="Create Category \u2713", fg_color=THEME["green"],
+        btn_submit = ctk.CTkButton(footer, text="Create \u2713", fg_color=THEME["green"],
                                    hover_color=THEME["green_dark"], command=self._submit)
         btn_submit.pack(side="right", expand=True, padx=5)
 
@@ -126,7 +126,7 @@ class AddCategoryModal(Modal):
         self.hex_label.configure(text=self.selected_color.upper())
 
     def _pick_custom_color(self):
-        color = colorchooser.askcolor(title="Choose Category Color", initialcolor=self.selected_color)[1]
+        color = colorchooser.askcolor(title="Choose Color", initialcolor=self.selected_color)[1]
         if color:
             self._select_color(color)
 
@@ -149,7 +149,7 @@ class AddCategoryModal(Modal):
             }
             
             create_category(data)
-            Toast(self.master, "Category created", type="success")
+            Toast(self.master, "Created successfully", type="success")
             self.on_success()
             self.destroy()
         except Exception as e:

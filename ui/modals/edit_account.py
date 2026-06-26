@@ -99,6 +99,7 @@ class EditAccountModal(Modal):
         try:
             name = self.name_entry.get().strip()
             if not name: raise ValueError("Account name is required")
+            
             raw_bal = self.bal_entry.get().strip().replace(",", "")
             try: balance = Decimal(raw_bal)
             except InvalidOperation: raise ValueError("Balance must be a valid number")

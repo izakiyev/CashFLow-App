@@ -9,3 +9,6 @@ build/
 dist/
 scratch/
 currency_rates.json
+*.spec
+audit*.py
+test.py

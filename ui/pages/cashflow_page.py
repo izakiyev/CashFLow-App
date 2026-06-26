@@ -20,8 +20,35 @@ class CashFlowPage(ctk.CTkFrame):
         "Last Month":    lambda: CashFlowPage._last_month(),
         "Last 3 Months": lambda: CashFlowPage._last_n_months(3),
         "This Year":     lambda: CashFlowPage._this_year(),
+        "Next Month":    lambda: CashFlowPage._next_month(),
+        "Next 3 Months": lambda: CashFlowPage._next_n_months(3),
         "All Time":      lambda: (None, None),
     }
+
+    @staticmethod
+    def _next_month():
+        from datetime import timedelta
+        now = datetime.now()
+        start = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1) - timedelta(microseconds=1)
+        return start, end
+
+    @staticmethod
+    def _next_n_months(n):
+        from datetime import timedelta
+        now = datetime.now()
+        month = now.month + n
+        year = now.year
+        while month > 12:
+            month -= 12
+            year += 1
+        next_month = month + 1
+        next_year = year
+        if next_month > 12:
+            next_month = 1
+            next_year += 1
+        end = datetime(next_year, next_month, 1) - timedelta(microseconds=1)
+        return now, end
 
     @staticmethod
     def _this_month():
@@ -98,28 +125,26 @@ class CashFlowPage(ctk.CTkFrame):
         ctk.CTkLabel(inner, text="Period:", font=FONTS["small"],
                      text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 8))
 
-        self._filter_buttons = {}
-        for label in self.PRESETS:
-            is_active = (label == "This Month")
-            btn = ctk.CTkButton(
-                inner, text=label, height=28, font=FONTS["small"],
-                fg_color=THEME["blue"] if is_active else THEME["bg_tertiary"],
-                hover_color=THEME["blue"] if is_active else THEME["border"],
-                text_color="white" if is_active else THEME["text_primary"],
-                command=lambda l=label: self._apply_preset(l)
-            )
-            btn.pack(side="left", padx=3)
-            self._filter_buttons[label] = btn
+        self._preset_menu = ctk.CTkOptionMenu(
+            inner, values=list(self.PRESETS.keys()),
+            command=self._apply_preset,
+            font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"], button_color=THEME["border"],
+            button_hover_color=THEME["border"], text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["bg_secondary"],
+            height=28, width=140
+        )
+        self._preset_menu.set("This Month")
+        self._preset_menu.pack(side="left", padx=(0, 6))
 
-        btn_custom = ctk.CTkButton(
+        self._custom_btn = ctk.CTkButton(
             inner, text="Custom", height=28, font=FONTS["small"],
             fg_color=THEME["bg_tertiary"],
             hover_color=THEME["border"],
             text_color=THEME["text_primary"],
             command=self._open_custom_date_modal
         )
-        btn_custom.pack(side="left", padx=3)
-        self._filter_buttons["Custom"] = btn_custom
+        self._custom_btn.pack(side="left", padx=0)
 
         self._range_lbl = ctk.CTkLabel(bar, text="", font=FONTS["small"], text_color=THEME["text_tertiary"])
         self._range_lbl.pack(side="right", padx=20)
@@ -128,12 +153,18 @@ class CashFlowPage(ctk.CTkFrame):
     def _apply_preset(self, label):
         if label != "Custom":
             self._date_from, self._date_to = self.PRESETS[label]()
-        for lbl, btn in self._filter_buttons.items():
-            is_active = (lbl == label)
-            btn.configure(
-                fg_color=THEME["blue"] if is_active else THEME["bg_tertiary"],
-                hover_color=THEME["blue"] if is_active else THEME["border"],
-                text_color="white" if is_active else THEME["text_primary"]
+            self._preset_menu.set(label)
+            self._custom_btn.configure(
+                fg_color=THEME["bg_tertiary"],
+                hover_color=THEME["border"],
+                text_color=THEME["text_primary"]
+            )
+        else:
+            self._preset_menu.set("Custom Range")
+            self._custom_btn.configure(
+                fg_color=THEME["blue"],
+                hover_color=THEME["blue"],
+                text_color="white"
             )
         self._update_range_label()
         self.refresh()

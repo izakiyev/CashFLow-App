@@ -267,3 +267,118 @@ def get_fx_gain_loss(company_id, date_from=None, date_to=None):
             "total_gain_loss": float(total_gain_loss),
             "currency": base_currency
         }
+
+def get_ar_ap_pipeline(company_id, months_ahead=6):
+    """
+    Groups pending transactions into upcoming months.
+    """
+    from database.models import Transaction, Company
+    from services.currency_service import convert_to_base
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    from decimal import Decimal
+    from database.session import get_session
+
+    with get_session() as session:
+        company = session.get(Company, company_id)
+        base_currency = company.currency if company else "AZN"
+        
+        now = datetime.now()
+        end_date = now + timedelta(days=30 * months_ahead)
+
+        txs = session.query(Transaction).filter(
+            Transaction.company_id == company_id,
+            Transaction.status != 'paid',
+            Transaction.date <= end_date,
+            Transaction.type.in_(['income', 'expense'])
+        ).all()
+
+        ar_map = defaultdict(Decimal)
+        ap_map = defaultdict(Decimal)
+        
+        for t in txs:
+            if not t.date: continue
+            
+            dt = t.date if t.date > now else now
+            month_key = dt.strftime("%b %Y")
+            sort_key = dt.strftime("%Y-%m")
+            
+            if t.base_amount is not None:
+                amt = Decimal(str(t.base_amount)) + Decimal(str(t.base_edv_amount or 0))
+            else:
+                amt = convert_to_base(Decimal(str(t.amount)) + Decimal(str(t.edv_amount or 0)), t.currency, base_currency)
+
+            key_tuple = (sort_key, month_key)
+            if t.type == 'income':
+                ar_map[key_tuple] += amt
+            else:
+                ap_map[key_tuple] += amt
+
+        all_keys = sorted(list(set(ar_map.keys()) | set(ap_map.keys())), key=lambda x: x[0])
+        
+        labels = [k[1] for k in all_keys]
+        ar_data = [float(ar_map[k]) for k in all_keys]
+        ap_data = [float(ap_map[k]) for k in all_keys]
+
+        return {
+            "labels": labels,
+            "ar": ar_data,
+            "ap": ap_data,
+            "base_currency": base_currency
+        }
+
+def get_top_counterparties(company_id, date_from=None, date_to=None, limit=5):
+    """
+    Returns top counterparties by volume for income and expense.
+    """
+    from database.models import Transaction, Company
+    from services.currency_service import convert_to_base
+    from decimal import Decimal
+    from database.session import get_session
+
+    with get_session() as session:
+        company = session.get(Company, company_id)
+        base_currency = company.currency if company else "AZN"
+
+        q = session.query(Transaction).filter(
+            Transaction.company_id == company_id,
+            Transaction.type.in_(['income', 'expense'])
+        )
+        if date_from and date_to:
+            q = q.filter(Transaction.date >= date_from, Transaction.date <= date_to)
+
+        from sqlalchemy.orm import joinedload
+        from database.models import Category
+        txs = q.options(joinedload(Transaction.category)).all()
+
+        income_map = {}
+        expense_map = {}
+
+        for t in txs:
+            # Use counterparty name if available, otherwise fall back to category name
+            if t.counterparty and t.counterparty.strip():
+                cp = t.counterparty.strip()
+            elif t.category:
+                cat = t.category
+                cp = cat.parent.name if cat.parent_id and hasattr(cat, 'parent') and cat.parent else cat.name
+            else:
+                cp = "Uncategorized"
+            
+            if t.base_amount is not None:
+                amt = Decimal(str(t.base_amount)) + Decimal(str(t.base_edv_amount or 0))
+            else:
+                amt = convert_to_base(Decimal(str(t.amount)) + Decimal(str(t.edv_amount or 0)), t.currency, base_currency)
+
+            if t.type == 'income':
+                income_map[cp] = income_map.get(cp, Decimal('0')) + amt
+            else:
+                expense_map[cp] = expense_map.get(cp, Decimal('0')) + amt
+
+        top_income = sorted([{"name": k, "amount": float(v)} for k, v in income_map.items()], key=lambda x: x['amount'], reverse=True)[:limit]
+        top_expense = sorted([{"name": k, "amount": float(v)} for k, v in expense_map.items()], key=lambda x: x['amount'], reverse=True)[:limit]
+
+        return {
+            "top_income": top_income,
+            "top_expense": top_expense,
+            "base_currency": base_currency
+        }

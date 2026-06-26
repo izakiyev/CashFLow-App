@@ -15,6 +15,7 @@ from ui.pages.ai_assistant_page import AIAssistantPage
 from ui.pages.setup_page import SetupWorkspaceScreen
 from services.auth_service import auto_login, get_current_user, logout
 from ui.modals.add_transaction import AddTransactionModal
+from ui.components.command_palette import CommandPalette
 
 
 class KTIBCashFlowApp(ctk.CTk):
@@ -49,7 +50,16 @@ class KTIBCashFlowApp(ctk.CTk):
         self.bind("<Control-t>", lambda e: self.show_page("transactions"))
         self.bind("<Control-d>", lambda e: self.show_page("dashboard"))
         self.bind("<Control-r>", lambda e: self.show_page("reports"))
+        self.bind("<Control-k>", self._open_command_palette)
         self.bind("<Control-q>", lambda e: self.quit())
+        
+        # Presentation Mode / Zoom Scaling
+        self.current_scaling = 1.0
+        self.bind("<Control-equal>", self._zoom_in)
+        self.bind("<Control-minus>", self._zoom_out)
+        self.bind("<Control-0>", self._zoom_reset)
+        self.bind("<Control-KP_Add>", self._zoom_in)
+        self.bind("<Control-KP_Subtract>", self._zoom_out)
         
         self.current_page_name = "dashboard"
         
@@ -101,6 +111,19 @@ class KTIBCashFlowApp(ctk.CTk):
         if hasattr(self, 'current_page') and hasattr(self.current_page, 'refresh'):
             self.current_page.refresh()
 
+    def _open_command_palette(self, event=None):
+        """Open the Ctrl+K command palette."""
+        user = get_current_user()
+        if not user or not user.get("company_id"):
+            return
+        CommandPalette(self, nav_callback=self.show_page,
+                       action_callback=self._handle_palette_action)
+
+    def _handle_palette_action(self, action):
+        """Handle non-navigation actions from the command palette."""
+        if action == "new_tx":
+            self._shortcut_new_transaction(None)
+
     def show_page(self, page_name, **kwargs):
         user = get_current_user()
 
@@ -113,16 +136,8 @@ class KTIBCashFlowApp(ctk.CTk):
         for widget in self.main_container.winfo_children():
             widget.destroy()
             
-        # Always rebuild sidebar so the company picker stays current
-        if self.sidebar_frame:
-            self.sidebar_frame.destroy()
-            self.sidebar_frame = None
-        self.sidebar_frame = Sidebar(self, self.show_page)
-        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-
+        self.rebuild_sidebar()
         self.main_container.grid(row=0, column=1, columnspan=1, sticky="nsew")
-        self.sidebar_frame.set_active(page_name)
-        self.sidebar_frame.user_label.configure(text=user["name"])
 
         # Route pages
         self.current_page_name = page_name
@@ -151,3 +166,27 @@ class KTIBCashFlowApp(ctk.CTk):
             self.current_page = AIAssistantPage(self.main_container, user["company_id"])
             
         self.current_page.pack(fill="both", expand=True)
+
+    def rebuild_sidebar(self):
+        user = get_current_user()
+        if not user:
+            return
+        if self.sidebar_frame:
+            self.sidebar_frame.destroy()
+        self.sidebar_frame = Sidebar(self, self.show_page)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        self.sidebar_frame.set_active(getattr(self, 'current_page_name', 'dashboard'))
+        self.sidebar_frame.user_label.configure(text=user.get("name", "Demo User"))
+
+    # ── Presentation Mode Zoom ───────────────────────────────────────────────
+    def _zoom_in(self, event=None):
+        self.current_scaling = min(2.5, self.current_scaling + 0.1)
+        ctk.set_widget_scaling(self.current_scaling)
+        
+    def _zoom_out(self, event=None):
+        self.current_scaling = max(0.5, self.current_scaling - 0.1)
+        ctk.set_widget_scaling(self.current_scaling)
+
+    def _zoom_reset(self, event=None):
+        self.current_scaling = 1.0
+        ctk.set_widget_scaling(self.current_scaling)

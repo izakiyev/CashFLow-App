@@ -43,7 +43,7 @@ class CategoryCard(ctk.CTkFrame):
             ctk.CTkLabel(badge, text=self.category.type.upper(), font=FONTS["small"], 
                          text_color=badge_text_color, height=20).pack(padx=8, pady=2)
         else:
-             ctk.CTkLabel(info_frame, text="Subcategory", font=FONTS["small"], 
+             ctk.CTkLabel(info_frame, text="Category", font=FONTS["small"], 
                           text_color=THEME["text_tertiary"]).pack(anchor="w")
 
         # Right side: Delete button
@@ -88,7 +88,7 @@ class CategoriesPage(ctk.CTkFrame):
         self.company_id = company_id
         self._active_search = ""
 
-        self.topbar = Topbar(self, title="Categories")
+        self.topbar = Topbar(self, title="Clients & Categories")
         self.topbar.pack(fill="x")
 
         # Top Filters Row
@@ -103,9 +103,9 @@ class CategoriesPage(ctk.CTkFrame):
         self.content_frame.grid_rowconfigure(0, weight=1)
 
         # Left Column (Income)
-        self.col_inc, self.inc_lbl = self._build_column(self.content_frame, "📈 Income Categories", "income", 0)
+        self.col_inc, self.inc_lbl = self._build_column(self.content_frame, "📈 Income Clients & Categories", "income", 0)
         # Right Column (Expense)
-        self.col_exp, self.exp_lbl = self._build_column(self.content_frame, "📉 Expense Categories", "expense", 1)
+        self.col_exp, self.exp_lbl = self._build_column(self.content_frame, "📉 Expense Clients & Categories", "expense", 1)
 
         self.refresh()
 
@@ -176,7 +176,7 @@ class CategoriesPage(ctk.CTkFrame):
                 ls.destroy()
         self._loading_states = []
         for col_frame in [self.inc_lbl, self.exp_lbl]: # these are now the col_frames
-            ls = LoadingState(col_frame, text="Loading categories...")
+            ls = LoadingState(col_frame, text="Loading clients...")
             ls.pack(pady=20)
             self._loading_states.append(ls)
             
@@ -226,7 +226,7 @@ class CategoriesPage(ctk.CTkFrame):
 
             if not filtered_cats:
                 empty = EmptyState(scroll, icon="🗂️", 
-                                   title="No categories found", 
+                                   title="No clients or categories found", 
                                    subtitle="Try a different search or add a new one.")
                 empty.pack(fill="both", expand=True, pady=40)
                 continue
@@ -254,7 +254,7 @@ class CategoriesPage(ctk.CTkFrame):
                 card = CategoryCard(scroll, category=c, on_edit=self._edit_cat, on_delete=self._prompt_delete)
                 card.pack(fill="x", padx=10, pady=6)
 
-        self.count_lbl.configure(text=f"{total_visible} categories")
+        self.count_lbl.configure(text=f"{total_visible} items")
 
     def _add_cat(self, t_filter):
         AddCategoryModal(self.winfo_toplevel(), self.company_id, t_filter, self.refresh)
@@ -267,6 +267,6 @@ class CategoriesPage(ctk.CTkFrame):
             if delete_category(cid):
                 Toast(self.master, "Category Deleted", type="success")
                 self.refresh()
-        ConfirmDialog(self.winfo_toplevel(), title="Delete Category", 
-                      message="Are you sure you want to delete this category?\nTransactions associated with it will lose their category classification.", 
+        ConfirmDialog(self.winfo_toplevel(), title="Delete Client / Category", 
+                      message="Are you sure you want to delete this client / category?\nTransactions associated with it will lose their classification.", 
                       on_confirm=do_delete)

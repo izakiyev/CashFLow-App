@@ -57,33 +57,6 @@ def update_account(account_id, new_data):
             if hasattr(account, k):
                 setattr(account, k, v)
                 
-        # If balance was changed manually, create an adjustment transaction
-        if 'balance' in new_data:
-            new_balance = Decimal(str(new_data['balance']))
-            diff = new_balance - Decimal(str(old_balance))
-            
-            if diff != 0:
-                company = session.get(Company, account.company_id)
-                base_curr = company.currency if company else "AZN"
-                abs_diff = abs(diff)
-                t_type = 'income' if diff > 0 else 'expense'
-                
-                base_amount = convert_to_base(abs_diff, account.currency, base_curr)
-                
-                txn = Transaction(
-                    company_id=account.company_id,
-                    account_id=account.id,
-                    type=t_type,
-                    amount=abs_diff,
-                    currency=account.currency,
-                    description="Manual Balance Adjustment",
-                    date=datetime.utcnow(),
-                    status="paid",
-                    base_amount=base_amount,
-                    account_amount=abs_diff
-                )
-                session.add(txn)
-                
         session.commit()
         session.refresh(account)
         return account

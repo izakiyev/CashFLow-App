@@ -88,7 +88,8 @@ def confirm_planned_payment(payment_id):
                 edv_account_id=payment.edv_account_id,
                 status="confirmed",
                 base_amount=base_amount,
-                base_edv_amount=base_edv_amount
+                base_edv_amount=base_edv_amount,
+                project_id=payment.project_id
             )
             session.add(txn)
             
@@ -119,7 +120,8 @@ def confirm_planned_payment(payment_id):
                     recurring=payment.recurring,
                     currency=payment.currency,
                     edv_amount=payment.edv_amount,
-                    edv_account_id=payment.edv_account_id
+                    edv_account_id=payment.edv_account_id,
+                    project_id=payment.project_id
                 )
                 session.add(new_payment)
             

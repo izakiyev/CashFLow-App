@@ -6,7 +6,7 @@ from ui.components.toast import Toast
 
 class EditCategoryModal(Modal):
     def __init__(self, master, category, on_success, **kwargs):
-        super().__init__(master, title=f"Edit Category: {category.name}", width=400, height=600, **kwargs)
+        super().__init__(master, title=f"Edit Client / Category: {category.name}", width=400, height=600, **kwargs)
         self.category = category
         self.on_success = on_success
         self.selected_color = category.color
@@ -19,13 +19,13 @@ class EditCategoryModal(Modal):
 
     def _build_ui(self):
         # Name
-        ctk.CTkLabel(self.content_frame, text="Category Name", font=FONTS["body"]).pack(anchor="w", pady=(0, 5))
+        ctk.CTkLabel(self.content_frame, text="Name", font=FONTS["body"]).pack(anchor="w", pady=(0, 5))
         self.name_entry = ctk.CTkEntry(self.content_frame, font=FONTS["heading"], height=40)
         self.name_entry.insert(0, self.category.name)
         self.name_entry.pack(fill="x", pady=(0, 20))
 
-        # Parent Category
-        ctk.CTkLabel(self.content_frame, text="Parent Category (Optional)", font=FONTS["body"]).pack(anchor="w", pady=(0, 5))
+        # Parent Client
+        ctk.CTkLabel(self.content_frame, text="Parent Client (Optional)", font=FONTS["body"]).pack(anchor="w", pady=(0, 5))
         
         parent_options = ["— None (Top Level) —"] + [c.name for c in self.potential_parents]
         self.parent_var = ctk.StringVar()
@@ -47,7 +47,7 @@ class EditCategoryModal(Modal):
         # For now, let's just allow it.
 
         # Color Grid
-        ctk.CTkLabel(self.content_frame, text="Category Color", font=FONTS["body"]).pack(anchor="w", pady=(0, 10))
+        ctk.CTkLabel(self.content_frame, text="Color", font=FONTS["body"]).pack(anchor="w", pady=(0, 10))
         color_frame = ctk.CTkFrame(self.content_frame, fg_color="transparent")
         color_frame.pack(fill="x")
         
@@ -103,8 +103,8 @@ class EditCategoryModal(Modal):
         }
         
         if update_category(self.category.id, data):
-            Toast(self.master, "Category updated", type="success")
+            Toast(self.master, "Updated successfully", type="success")
             self.on_success()
             self.destroy()
         else:
-            Toast(self, "Failed to update category", type="error")
+            Toast(self, "Failed to update", type="error")

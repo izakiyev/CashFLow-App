@@ -10,7 +10,8 @@ from ui.components.toast import Toast
 from ui.utils.thread_worker import ThreadWorker
 from services.report_service import (
     get_pl_statement, get_balance_summary,
-    get_vat_report, get_fx_gain_loss, get_cash_flow_forecast
+    get_vat_report, get_fx_gain_loss, get_cash_flow_forecast,
+    get_ar_ap_pipeline, get_top_counterparties
 )
 from services.currency_service import format_currency
 from services.export_service import export_pdf, export_excel
@@ -44,8 +45,35 @@ class ReportsPage(ctk.CTkFrame):
         "Last Month":    lambda: ReportsPage._last_month(),
         "Last 3 Months": lambda: ReportsPage._last_n_months(3),
         "This Year":     lambda: ReportsPage._this_year(),
+        "Next Month":    lambda: ReportsPage._next_month(),
+        "Next 3 Months": lambda: ReportsPage._next_n_months(3),
         "All Time":      lambda: (None, None),
     }
+
+    @staticmethod
+    def _next_month():
+        from datetime import timedelta
+        now = datetime.now()
+        start = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1) - timedelta(microseconds=1)
+        return start, end
+
+    @staticmethod
+    def _next_n_months(n):
+        from datetime import timedelta
+        now = datetime.now()
+        month = now.month + n
+        year = now.year
+        while month > 12:
+            month -= 12
+            year += 1
+        next_month = month + 1
+        next_year = year
+        if next_month > 12:
+            next_month = 1
+            next_year += 1
+        end = datetime(next_year, next_month, 1) - timedelta(microseconds=1)
+        return now, end
 
     @staticmethod
     def _this_month():
@@ -76,6 +104,8 @@ class ReportsPage(ctk.CTkFrame):
         ("vat",      "VAT Report"),
         ("fx",       "FX Gain/Loss"),
         ("forecast", "Cash Forecast"),
+        ("arap",     "AR / AP Pipeline"),
+        ("counterparties", "Top Counterparties"),
     ]
 
     def __init__(self, master, company_id, **kwargs):
@@ -171,6 +201,14 @@ class ReportsPage(ctk.CTkFrame):
         self._chart_title = ctk.CTkLabel(chdr, text="Visual Breakdown", font=FONTS["heading"],
                                          text_color=THEME["text_primary"])
         self._chart_title.pack(side="left")
+        
+        ctk.CTkButton(
+            chdr, text="⛶", width=30, height=24,
+            fg_color="transparent", text_color=THEME["text_tertiary"],
+            hover_color=THEME["bg_tertiary"], font=FONTS["small"],
+            command=self._expand_chart
+        ).pack(side="right")
+        
         ctk.CTkFrame(self._cpanel, height=1, fg_color=THEME["border"]).pack(fill="x")
 
         self._chart_frame = ChartFrame(self._cpanel)
@@ -183,24 +221,26 @@ class ReportsPage(ctk.CTkFrame):
         inner.pack(side="left", padx=16, pady=4)
         ctk.CTkLabel(inner, text="Period:", font=FONTS["small"],
                      text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 8))
-        self._filter_btns = {}
-        for label in self.PRESETS:
-            active = (label == "This Month")
-            b = ctk.CTkButton(
-                inner, text=label, height=26, font=FONTS["small"],
-                fg_color=THEME["blue"] if active else THEME["bg_tertiary"],
-                hover_color=THEME["blue"] if active else THEME["border"],
-                text_color="white" if active else THEME["text_primary"],
-                command=lambda l=label: self._apply_preset(l)
-            )
-            b.pack(side="left", padx=2)
-            self._filter_btns[label] = b
+        self._preset_menu = ctk.CTkOptionMenu(
+            inner, values=list(self.PRESETS.keys()),
+            command=self._apply_preset,
+            font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"], button_color=THEME["border"],
+            button_hover_color=THEME["border"], text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["bg_secondary"],
+            height=28, width=140
+        )
+        self._preset_menu.set("This Month")
+        self._preset_menu.pack(side="left", padx=(0, 6))
 
-        ctk.CTkButton(inner, text="Custom", height=26, font=FONTS["small"],
-                      fg_color=THEME["bg_tertiary"], hover_color=THEME["border"],
-                      text_color=THEME["text_primary"],
-                      command=self._open_custom).pack(side="left", padx=2)
-        self._filter_btns["Custom"] = None
+        self._custom_btn = ctk.CTkButton(
+            inner, text="Custom", height=28, font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"],
+            hover_color=THEME["border"],
+            text_color=THEME["text_primary"],
+            command=self._open_custom
+        )
+        self._custom_btn.pack(side="left", padx=0)
 
         self._range_lbl = ctk.CTkLabel(parent, text="", font=FONTS["small"],
                                        text_color=THEME["text_tertiary"])
@@ -210,13 +250,18 @@ class ReportsPage(ctk.CTkFrame):
     def _apply_preset(self, label):
         if label != "Custom":
             self._date_from, self._date_to = self.PRESETS[label]()
-        for lbl, btn in self._filter_btns.items():
-            if btn is None: continue
-            active = (lbl == label)
-            btn.configure(
-                fg_color=THEME["blue"] if active else THEME["bg_tertiary"],
-                text_color="white" if active else THEME["text_primary"],
-                hover_color=THEME["blue"] if active else THEME["border"],
+            self._preset_menu.set(label)
+            self._custom_btn.configure(
+                fg_color=THEME["bg_tertiary"],
+                hover_color=THEME["border"],
+                text_color=THEME["text_primary"]
+            )
+        else:
+            self._preset_menu.set("Custom Range")
+            self._custom_btn.configure(
+                fg_color=THEME["blue"],
+                hover_color=THEME["blue"],
+                text_color="white"
             )
         self._update_range_lbl()
         self.refresh()
@@ -284,30 +329,49 @@ class ReportsPage(ctk.CTkFrame):
         if tab == "forecast":
             dates, balances = get_cash_flow_forecast(self.company_id, days=90)
             return {"tab": tab, "data": {"dates": dates, "balances": balances}}
+        if tab == "arap":
+            return {"tab": tab, "data": get_ar_ap_pipeline(self.company_id)}
+        if tab == "counterparties":
+            return {"tab": tab, "data": get_top_counterparties(self.company_id, self._date_from, self._date_to)}
 
     def _render(self, payload):
         try:
             if not self.winfo_exists(): return
         except Exception: return
+        self._last_payload = payload
         for w in self._table_container.winfo_children(): w.destroy()
         tab = payload["tab"]; data = payload["data"]
         dispatch = {
-            "pl":       self._render_pl,
-            "bal":      self._render_bal,
-            "vat":      self._render_vat,
-            "fx":       self._render_fx,
-            "forecast": self._render_forecast,
+            "pl":           self._render_pl,
+            "bal":          self._render_bal,
+            "vat":          self._render_vat,
+            "fx":           self._render_fx,
+            "forecast":     self._render_forecast,
+            "arap":         self._render_arap,
+            "counterparties": self._render_counterparties,
         }
         dispatch[tab](data)
 
     # ── Renderers ──────────────────────────────────────────────────────────────
 
-    def _set_kpis(self, values):
+    def _set_kpis(self, values, titles=None):
         """values: list of (text, color) tuples, up to 4."""
         for i, (lbl, clr) in enumerate(values):
             self._kv[i].configure(text=lbl, text_color=clr)
         for i in range(len(values), 4):
             self._kv[i].configure(text="—", text_color=THEME["text_tertiary"])
+            
+        if titles:
+            for i, t in enumerate(titles):
+                card_lbl = self._kv[i].master
+                for child in card_lbl.winfo_children():
+                    if hasattr(child, '_text') or isinstance(child, ctk.CTkLabel):
+                        try:
+                            if child.cget("font") == ("Inter", 10, "bold"):
+                                child.configure(text=t)
+                                break
+                        except Exception:
+                            pass
 
     def _render_pl(self, pl):
         bc = pl.get("base_currency", "AZN")
@@ -321,24 +385,13 @@ class ReportsPage(ctk.CTkFrame):
             (format_currency(net, bc), THEME["green"] if net >= 0 else THEME["red"]),
             (f"{round(net / pl['total_income'] * 100, 1)}%" if pl["total_income"] else "—",
              THEME["green"] if net >= 0 else THEME["red"]),
-        ])
+        ], ["TOTAL INCOME", "TOTAL EXPENSES", "NET PROFIT", "MARGIN"])
 
-        # Update KPI card titles
-        titles = ["TOTAL INCOME", "TOTAL EXPENSES", "NET PROFIT", "MARGIN"]
-        for i, t in enumerate(titles):
-            card_lbl = self._kv[i].master
-            for child in card_lbl.winfo_children():
-                if hasattr(child, '_text') or isinstance(child, ctk.CTkLabel):
-                    try:
-                        if child.cget("font") == ("Inter", 10, "bold"):
-                            child.configure(text=t)
-                            break
-                    except Exception:
-                        pass
+
 
         # Table
         rows = []
-        t = DataTable(self._table_container, ["Category", "Amount", "% Share"])
+        t = DataTable(self._table_container, ["Client / Category", "Amount", "% Share"])
         t.pack(fill="both", expand=True)
 
         if pl["income"]:
@@ -346,7 +399,7 @@ class ReportsPage(ctk.CTkFrame):
             for item in sorted(pl["income"], key=lambda x: x["amount"], reverse=True):
                 pct = f"{item['amount'] / pl['total_income'] * 100:.1f}%" if pl["total_income"] else ""
                 t.add_row([item["name"], format_currency(item["amount"], bc), pct])
-                rows.append({"Section": "Income", "Category": item["name"],
+                rows.append({"Section": "Income", "Client / Category": item["name"],
                              "Amount": format_currency(item["amount"], bc)})
             t.add_row(["Total Income", format_currency(pl["total_income"], bc), "100%"],
                       color=THEME["green"])
@@ -356,7 +409,7 @@ class ReportsPage(ctk.CTkFrame):
             for item in sorted(pl["expenses"], key=lambda x: x["amount"], reverse=True):
                 pct = f"{item['amount'] / pl['total_expenses'] * 100:.1f}%" if pl["total_expenses"] else ""
                 t.add_row([item["name"], format_currency(item["amount"], bc), pct])
-                rows.append({"Section": "Expense", "Category": item["name"],
+                rows.append({"Section": "Expense", "Client / Category": item["name"],
                              "Amount": format_currency(item["amount"], bc)})
             t.add_row(["Total Expenses", format_currency(pl["total_expenses"], bc), "100%"],
                       color=THEME["red"])
@@ -365,7 +418,7 @@ class ReportsPage(ctk.CTkFrame):
                   color=THEME["green"] if net >= 0 else THEME["red"])
 
         self._export_title = "Profit & Loss Statement"
-        self._export_headers = ["Section", "Category", "Amount"]
+        self._export_headers = ["Section", "Client / Category", "Amount"]
         self._export_data = rows
         self._row_count.configure(text=f"{len(rows)} items")
 
@@ -382,7 +435,7 @@ class ReportsPage(ctk.CTkFrame):
             (format_currency(bal["total"], bc), THEME["green"]),
             ("—", THEME["text_tertiary"]),
             ("—", THEME["text_tertiary"]),
-        ])
+        ], ["TOTAL ACCOUNTS", "TOTAL BALANCE", "", ""])
 
         t = DataTable(self._table_container, ["Account", "Type", "Currency", "Balance"])
         t.pack(fill="both", expand=True)
@@ -414,7 +467,7 @@ class ReportsPage(ctk.CTkFrame):
             (format_currency(vat["paid"],      bc), THEME["red"]),
             (format_currency(net, bc), THEME["green"] if net >= 0 else THEME["red"]),
             ("—", THEME["text_tertiary"]),
-        ])
+        ], ["COLLECTED", "PAID", "NET VAT", ""])
 
         t = DataTable(self._table_container, ["VAT Type", "Amount"])
         t.pack(fill="both", expand=True)
@@ -448,7 +501,7 @@ class ReportsPage(ctk.CTkFrame):
             ("Gain" if gl >= 0 else "Loss", THEME["green"] if gl >= 0 else THEME["red"]),
             ("—", THEME["text_tertiary"]),
             ("—", THEME["text_tertiary"]),
-        ])
+        ], ["NET FX", "DIRECTION", "", ""])
 
         t = DataTable(self._table_container, ["Metric", "Value"])
         t.pack(fill="both", expand=True)
@@ -499,7 +552,7 @@ class ReportsPage(ctk.CTkFrame):
             (format_currency(end_b,   "AZN"), THEME["green"] if end_b >= start_b else THEME["red"]),
             (format_currency(min_b,   "AZN"), THEME["red"]),
             (format_currency(max_b,   "AZN"), THEME["green"]),
-        ])
+        ], ["START BALANCE", "END BALANCE", "MIN BALANCE", "MAX BALANCE"])
 
         # Table: weekly snapshots
         t = DataTable(self._table_container, ["Date", "Projected Balance"])
@@ -517,17 +570,146 @@ class ReportsPage(ctk.CTkFrame):
         self._export_data = rows
         self._row_count.configure(text=f"{len(dates)}-day projection")
 
-        # Line chart
+        # Line chart — using correct signature: draw_line_chart(days, values, label, color)
         try:
             self._chart_frame.draw_line_chart(
-                labels=dates[::7],
-                series=[{"label": "Balance", "data": balances[::7], "color": THEME["blue"]}]
+                days=dates[::7],
+                values=balances[::7],
+                label="Balance",
+                color=THEME["blue"]
             )
-        except Exception:
-            # Fallback if draw_line_chart not supported
-            import tkinter as tk
-            ctk.CTkLabel(self._cpanel, text="Chart: line charts require matplotlib",
-                         font=FONTS["small"], text_color=THEME["text_tertiary"]).pack(pady=40)
+        except Exception as e:
+            print("Forecast chart error:", e)
+
+    def _render_arap(self, data):
+        bc = data.get("base_currency", "AZN")
+        labels = data["labels"]
+        ar = data["ar"]
+        ap = data["ap"]
+        
+        self._table_title.configure(text="AR / AP Pipeline")
+        self._chart_title.configure(text="Pipeline Chart")
+        
+        total_ar = sum(ar)
+        total_ap = sum(ap)
+        net_pipeline = total_ar - total_ap
+        
+        self._set_kpis([
+            (format_currency(total_ar, bc),      THEME["green"]),
+            (format_currency(total_ap, bc),      THEME["red"]),
+            (format_currency(net_pipeline, bc),  THEME["blue"] if net_pipeline >= 0 else THEME["red"]),
+            (str(len(labels)),                   THEME["text_secondary"]),
+        ], ["EXPECTED INCOME", "EXPECTED EXPENSE", "NET PIPELINE", "PERIODS"])
+        
+        t = DataTable(self._table_container, ["Period", "Expected Income (AR)", "Expected Expense (AP)", "Net"])
+        t.pack(fill="both", expand=True)
+        rows = []
+        for i in range(len(labels)):
+            net_p = ar[i] - ap[i]
+            row_color = THEME["green"] if net_p >= 0 else THEME["red"]
+            t.add_row([
+                labels[i],
+                format_currency(ar[i], bc),
+                format_currency(ap[i], bc),
+                format_currency(net_p, bc)
+            ], color=row_color)
+            rows.append({"Period": labels[i], "AR": format_currency(ar[i], bc),
+                         "AP": format_currency(ap[i], bc), "Net": format_currency(net_p, bc)})
+        
+        # Summary row
+        t.add_row(["TOTAL",
+                   format_currency(total_ar, bc),
+                   format_currency(total_ap, bc),
+                   format_currency(net_pipeline, bc)
+                   ], color=THEME["blue"] if net_pipeline >= 0 else THEME["red"])
+
+        self._export_title = "AR AP Pipeline"
+        self._export_headers = ["Period", "AR", "AP", "Net"]
+        self._export_data = rows
+        self._row_count.configure(text=f"{len(labels)} periods")
+        
+        try:
+            self._chart_frame.draw_bar_chart(
+                x_labels=labels,
+                data_series={
+                    "Expected Income": ar,
+                    "Expected Expense": ap
+                },
+                series_colors={
+                    "Expected Income":  THEME["green"],
+                    "Expected Expense": THEME["red"],
+                }
+            )
+        except Exception as e:
+            print("ARAP Chart Error:", e)
+
+    def _render_counterparties(self, data):
+        bc = data.get("base_currency", "AZN")
+        top_in = data["top_income"]
+        top_out = data["top_expense"]
+
+        total_income_vol  = sum(i["amount"] for i in top_in)
+        total_expense_vol = sum(i["amount"] for i in top_out)
+
+        self._table_title.configure(text="Top Counterparties")
+        self._chart_title.configure(text="Top Expenses by Source")
+
+        self._set_kpis([
+            (str(len(top_in)),                        THEME["green"]),
+            (str(len(top_out)),                       THEME["red"]),
+            (format_currency(total_income_vol,  bc),  THEME["green"]),
+            (format_currency(total_expense_vol, bc),  THEME["red"]),
+        ], ["INCOME SOURCES", "EXPENSE DESTS", "TOTAL INCOME VOL", "TOTAL EXPENSE VOL"])
+
+        t = DataTable(self._table_container, ["#", "Counterparty", "Type", "Volume", "Share"])
+        t.pack(fill="both", expand=True)
+        rows = []
+
+        if top_in:
+            t.add_row(["", "── TOP INCOME ──", "", "", ""], color=THEME["green"])
+            for idx, item in enumerate(top_in, 1):
+                pct = f"{item['amount'] / total_income_vol * 100:.1f}%" if total_income_vol else "—"
+                t.add_row([str(idx), item["name"], "Income",
+                           format_currency(item["amount"], bc), pct])
+                rows.append({"Counterparty": item["name"], "Type": "Income",
+                             "Volume": format_currency(item["amount"], bc), "Share": pct})
+
+        if top_out:
+            t.add_row(["", "── TOP EXPENSE ──", "", "", ""], color=THEME["red"])
+            for idx, item in enumerate(top_out, 1):
+                pct = f"{item['amount'] / total_expense_vol * 100:.1f}%" if total_expense_vol else "—"
+                t.add_row([str(idx), item["name"], "Expense",
+                           format_currency(item["amount"], bc), pct])
+                rows.append({"Counterparty": item["name"], "Type": "Expense",
+                             "Volume": format_currency(item["amount"], bc), "Share": pct})
+
+        self._export_title   = "Top Counterparties"
+        self._export_headers = ["Counterparty", "Type", "Volume", "Share"]
+        self._export_data    = rows
+        self._row_count.configure(text=f"{len(top_in)} income · {len(top_out)} expense")
+
+        # Horizontal bar chart: show top expenses (or income if no expenses)
+        if top_out:
+            chart_labels = [i["name"][:22] for i in top_out]
+            chart_values = [i["amount"]    for i in top_out]
+            chart_colors = [THEME["red"]]  * len(top_out)
+            chart_title  = "Top Expenses"
+        else:
+            chart_labels = [i["name"][:22] for i in top_in]
+            chart_values = [i["amount"]    for i in top_in]
+            chart_colors = [THEME["green"]] * len(top_in)
+            chart_title  = "Top Income Sources"
+
+        if chart_labels:
+            try:
+                self._chart_frame.draw_horizontal_bar_chart(
+                    labels=chart_labels,
+                    values=chart_values,
+                    colors=chart_colors,
+                    title=chart_title
+                )
+            except Exception as e:
+                print("Counterparties Chart Error:", e)
 
     # ── Exports ────────────────────────────────────────────────────────────────
 
@@ -556,3 +738,58 @@ class ReportsPage(ctk.CTkFrame):
         if path:
             res = export_excel(path, self._export_data, self._export_headers, title=self._export_title, meta=self._get_meta())
             if res: Toast(self.winfo_toplevel(), f"Excel saved: {os.path.basename(res)}", type="success")
+
+    def _expand_chart(self):
+        from ui.modals.expanded_chart_modal import ExpandedChartModal
+        if not hasattr(self, '_last_payload'): return
+        
+        tab = self._last_payload["tab"]
+        data = self._last_payload["data"]
+        
+        if tab == "pl":
+            chart_data = data["expenses"] if data["expenses"] else data["income"]
+            kwargs = {"data": chart_data}
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Breakdown", "donut", kwargs)
+        elif tab == "bal":
+            accs = data["accounts"]
+            chart_data = [{"name": a["name"], "amount": a["balance"], "color": a.get("color") or THEME["blue"]} for a in accs]
+            kwargs = {"data": chart_data}
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Balance Distribution", "donut", kwargs)
+        elif tab == "vat":
+            chart_data = [
+                {"name": "Collected", "amount": data["collected"], "color": THEME["green"]},
+                {"name": "Paid",      "amount": data["paid"],      "color": THEME["red"]},
+            ]
+            kwargs = {"data": [d for d in chart_data if d["amount"] > 0]}
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded VAT Breakdown", "donut", kwargs)
+        elif tab == "fx":
+            gl = data["total_gain_loss"]
+            chart_data = [{"name": "FX Result", "amount": abs(gl), "color": THEME["green"] if gl >= 0 else THEME["red"]}]
+            kwargs = {"data": chart_data}
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded FX Summary", "donut", kwargs)
+        elif tab == "forecast":
+            dates = data["dates"]
+            balances = data["balances"]
+            kwargs = {
+                "days": dates[::7],
+                "values": balances[::7],
+                "label": "Balance",
+                "color": THEME["blue"]
+            }
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Projected Balance", "line", kwargs)
+        elif tab == "arap":
+            labels = data["labels"]
+            ar = data["ar"]
+            ap = data["ap"]
+            kwargs = {
+                "days": labels,
+                "values": ar,
+                "label": "Income",
+                "color": THEME["green"]
+            }
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Pipeline", "line", kwargs)
+        elif tab == "counterparties":
+            top_out = data["top_expense"]
+            chart_data = [{"name": i["name"], "amount": i["amount"], "color": THEME["red"]} for i in top_out]
+            kwargs = {"data": chart_data}
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Counterparties", "donut", kwargs)

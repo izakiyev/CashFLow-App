@@ -1,6 +1,6 @@
 from database.session import get_session
 from database.models import Transaction, Account, Category, Company
-from sqlalchemy import func
+from sqlalchemy import func, extract
 from sqlalchemy.orm import joinedload
 from datetime import datetime
 from services.currency_service import convert_to_base
@@ -130,6 +130,7 @@ def get_transaction(tx_id):
             "account_id": t.account_id,
             "to_account_id": t.to_account_id,
             "category_id": t.category_id,
+            "project_id": t.project_id,
             "type": t.type,
             "amount": t.amount, # Keeps as Decimal
             "currency": t.currency,
@@ -193,7 +194,10 @@ def get_transactions(company_id, filters=None, limit=None, offset=None):
                     (Transaction.to_account_id == filters['account_id'])
                 )
             if filters.get('category_id') and filters['category_id'] != 'All':
-                query = query.filter(Transaction.category_id == filters['category_id'])
+                cat_id = filters['category_id']
+                child_cats = session.query(Category.id).filter(Category.parent_id == cat_id).all()
+                child_ids = [c[0] for c in child_cats]
+                query = query.filter(Transaction.category_id.in_([cat_id] + child_ids))
             if filters.get('project_id') and filters['project_id'] != 'All':
                 query = query.filter(Transaction.project_id == filters['project_id'])
             if filters.get('status') and filters['status'] != 'All':
@@ -275,7 +279,7 @@ def pay_transaction(tx_id):
         session.commit()
         return True
 
-def get_spending_by_category(company_id, month=None, year=None, date_from=None, date_to=None, parent_category_id=None, tx_type='expense'):
+def get_spending_by_category(company_id, month=None, year=None, date_from=None, date_to=None, parent_category_id=None, tx_type='expense', status=None):
     from services.currency_service import convert_to_base
     from database.models import Company, Category
     
@@ -288,6 +292,13 @@ def get_spending_by_category(company_id, month=None, year=None, date_from=None, 
             Transaction.company_id == company_id,
             Transaction.type == tx_type
         )
+        if status and status != 'All':
+            st = status.lower()
+            if st == 'pending':
+                q = q.filter(Transaction.status.in_(['pending', 'qaime_gozleyir', 'confirmed']))
+            else:
+                q = q.filter(Transaction.status == st)
+            
         if date_from and date_to:
             # Explicit date range
             q = q.filter(Transaction.date >= date_from, Transaction.date <= date_to)
@@ -441,7 +452,7 @@ def get_daily_spending_trend(company_id, month=None, year=None, date_from=None, 
             
         return labels, cumulative
 
-def get_daily_cashflow_series(company_id, date_from=None, date_to=None):
+def get_daily_cashflow_series(company_id, date_from=None, date_to=None, status=None):
     from services.currency_service import convert_to_base
     from database.models import Company
     
@@ -454,6 +465,12 @@ def get_daily_cashflow_series(company_id, date_from=None, date_to=None):
             Transaction.company_id == company_id,
             Transaction.type.in_(['income', 'expense'])
         )
+        if status and status != 'All':
+            st = status.lower()
+            if st == 'pending':
+                q = q.filter(Transaction.status.in_(['pending', 'qaime_gozleyir', 'confirmed']))
+            else:
+                q = q.filter(Transaction.status == st)
         
         if date_from and date_to:
             q = q.filter(Transaction.date >= date_from, Transaction.date <= date_to)
@@ -466,8 +483,8 @@ def get_daily_cashflow_series(company_id, date_from=None, date_to=None):
             last_day = calendar.monthrange(now.year, now.month)[1]
             end_date = datetime(now.year, now.month, last_day).date()
             q = q.filter(
-                func.extract('month', Transaction.date) == now.month,
-                func.extract('year',  Transaction.date) == now.year
+                extract('month', Transaction.date) == now.month,
+                extract('year',  Transaction.date) == now.year
             )
 
         days_count = (end_date - start_date).days + 1
@@ -500,7 +517,7 @@ def get_daily_cashflow_series(company_id, date_from=None, date_to=None):
         return labels, inc_series, exp_series
 
 
-def get_dashboard_summary(company_id, date_from=None, date_to=None):
+def get_dashboard_summary(company_id, date_from=None, date_to=None, status=None):
     """Calculates Income, Expenses, and Total Balance for the Dashboard.
     Optionally filters by date_from / date_to; defaults to current month.
     """
@@ -556,10 +573,17 @@ def get_dashboard_summary(company_id, date_from=None, date_to=None):
             # Default: current month
             month, year = now.month, now.year
             q = q.filter(
-                func.extract('month', Transaction.date) == month,
-                func.extract('year',  Transaction.date) == year
+                extract('month', Transaction.date) == month,
+                extract('year',  Transaction.date) == year
             )
             days_in_period = now.day
+
+        if status and status != 'All':
+            st = status.lower()
+            if st == 'pending':
+                q = q.filter(Transaction.status.in_(['pending', 'qaime_gozleyir', 'confirmed']))
+            else:
+                q = q.filter(Transaction.status == st)
 
         month_txs = q.all()
         
@@ -629,7 +653,10 @@ def get_filtered_transactions_summary(company_id, filters=None):
                     (Transaction.to_account_id == filters['account_id'])
                 )
             if filters.get('category_id') and filters['category_id'] != 'All':
-                query = query.filter(Transaction.category_id == filters['category_id'])
+                cat_id = filters['category_id']
+                child_cats = session.query(Category.id).filter(Category.parent_id == cat_id).all()
+                child_ids = [c[0] for c in child_cats]
+                query = query.filter(Transaction.category_id.in_([cat_id] + child_ids))
             if filters.get('project_id') and filters['project_id'] != 'All':
                 query = query.filter(Transaction.project_id == filters['project_id'])
             if filters.get('status') and filters['status'] != 'All':
@@ -654,7 +681,8 @@ def get_filtered_transactions_summary(company_id, filters=None):
 
         total_income = Decimal("0.0")
         total_expenses = Decimal("0.0")
-        total_vat = Decimal("0.0")
+        income_vat = Decimal("0.0")
+        expense_vat = Decimal("0.0")
 
         for t_type, t_amount, t_curr, t_edv, b_amt, b_edv in txs:
             vat_norm = Decimal("0.0")
@@ -669,24 +697,28 @@ def get_filtered_transactions_summary(company_id, filters=None):
             
             if t_type == 'income':
                 total_income += norm
+                income_vat += vat_norm
             elif t_type == 'expense':
                 total_expenses += norm
-
-            total_vat += vat_norm
+                expense_vat += vat_norm
 
         return {
             "total_income":    float(total_income),
             "total_expenses":  float(total_expenses),
             "net_profit":      float(total_income - total_expenses),
-            "total_vat":       float(total_vat),
+            "income_vat":      float(income_vat),
+            "expense_vat":     float(expense_vat),
             "base_currency":   base_currency,
         }
 
 
 def get_projected_balance(company_id):
-    """Returns current balance minus all pending planned payments (converted to base currency)."""
+    """Returns current balance adjusted by all pending/unpaid transactions for different timeframes.
+    Only uses unpaid Transactions - PlannedPayments are not considered.
+    """
     from services.currency_service import convert_to_base
-    from database.models import Company, PlannedPayment
+    from database.models import Company
+    from datetime import datetime, timedelta
 
     with get_session() as session:
         company = session.get(Company, company_id)
@@ -698,28 +730,58 @@ def get_projected_balance(company_id):
         ).all()
         total_balance = sum(float(convert_to_base(acc.balance, acc.currency, base_currency)) for acc in accounts)
 
-        pending = session.query(PlannedPayment).filter(
-            PlannedPayment.company_id == company_id,
-            PlannedPayment.status == 'pending'
+        # Only unpaid/pending transactions
+        unpaid_txs = session.query(Transaction).filter(
+            Transaction.company_id == company_id,
+            Transaction.status != 'paid',
+            Transaction.type.in_(['income', 'expense'])
         ).all()
 
-        total_outgoing = Decimal("0.0")
-        total_incoming = Decimal("0.0")
-        
-        for p in pending:
-            amt = Decimal(str(p.amount)) + Decimal(str(p.edv_amount or 0))
-            converted = convert_to_base(amt, p.currency, base_currency)
-            if p.type == 'expense':
-                total_outgoing += converted
-            elif p.type == 'income':
-                total_incoming += converted
+        now = datetime.now()
+        thirty_days = now + timedelta(days=30)
+        ninety_days = now + timedelta(days=90)
 
+        tot_inc_all = Decimal("0.0")
+        tot_out_all = Decimal("0.0")
+        tot_inc_30  = Decimal("0.0")
+        tot_out_30  = Decimal("0.0")
+        tot_inc_90  = Decimal("0.0")
+        tot_out_90  = Decimal("0.0")
+
+        for t in unpaid_txs:
+            # Use snapshot if available, else convert at current rate
+            if t.base_amount is not None:
+                converted = Decimal(str(t.base_amount)) + Decimal(str(t.base_edv_amount or 0))
+            else:
+                amt = Decimal(str(t.amount)) + Decimal(str(t.edv_amount or 0))
+                converted = convert_to_base(amt, t.currency, base_currency)
+
+            tx_date = t.date  # datetime
+
+            if t.type == 'expense':
+                tot_out_all += converted
+            elif t.type == 'income':
+                tot_inc_all += converted
+
+            if tx_date <= thirty_days:
+                if t.type == 'expense':
+                    tot_out_30 += converted
+                elif t.type == 'income':
+                    tot_inc_30 += converted
+
+            if tx_date <= ninety_days:
+                if t.type == 'expense':
+                    tot_out_90 += converted
+                elif t.type == 'income':
+                    tot_inc_90 += converted
+
+        cur_bal = Decimal(str(total_balance))
         return {
-            "current_balance": float(total_balance),
-            "pending_outgoing": float(total_outgoing),
-            "pending_incoming": float(total_incoming),
-            "projected_balance": float(Decimal(str(total_balance)) + total_incoming - total_outgoing),
-            "base_currency": base_currency
+            "current_balance":        float(total_balance),
+            "projected_balance_all":  float(cur_bal + tot_inc_all - tot_out_all),
+            "projected_balance_30d":  float(cur_bal + tot_inc_30 - tot_out_30),
+            "projected_balance_90d":  float(cur_bal + tot_inc_90 - tot_out_90),
+            "base_currency":          base_currency
         }
 
 def get_summary(company_id, period="all"):
@@ -736,7 +798,7 @@ def get_summary(company_id, period="all"):
     else:
         return get_dashboard_summary(company_id)
 
-def get_monthly_series(company_id, months=6, date_from=None, date_to=None):
+def get_monthly_series(company_id, months=6, date_from=None, date_to=None, status=None):
     """Returns labels (month names) and income/expense series for the last N months or a specific date range."""
     from services.currency_service import convert_to_base
     from database.models import Company
@@ -805,13 +867,21 @@ def get_monthly_series(company_id, months=6, date_from=None, date_to=None):
             dt = datetime(y, m, 1)
             labels.append(dt.strftime("%b %Y"))
 
-            txs = session.query(Transaction.type, Transaction.amount, Transaction.currency, 
+            q = session.query(Transaction.type, Transaction.amount, Transaction.currency, 
                                  Transaction.edv_amount, Transaction.base_amount, Transaction.base_edv_amount).filter(
                 Transaction.company_id == company_id,
-                func.extract('month', Transaction.date) == m,
-                func.extract('year', Transaction.date) == y,
+                extract('month', Transaction.date) == m,
+                extract('year', Transaction.date) == y,
                 Transaction.type.in_(['income', 'expense'])
-            ).all()
+            )
+            if status and status != 'All':
+                st = status.lower()
+                if st == 'pending':
+                    q = q.filter(Transaction.status.in_(['pending', 'qaime_gozleyir', 'confirmed']))
+                else:
+                    q = q.filter(Transaction.status == st)
+                
+            txs = q.all()
 
             m_inc = Decimal("0.0")
             m_exp = Decimal("0.0")

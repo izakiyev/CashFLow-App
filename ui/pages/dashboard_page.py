@@ -4,6 +4,7 @@ from ui.theme import THEME, FONTS
 from ui.components.topbar import Topbar
 from ui.components.kpi_card import KPICard
 from ui.components.chart_frame import ChartFrame
+from ui.components.mini_rows import AccountMiniRow, TxMiniRow, PlannedMiniRow
 from ui.modals.add_transaction import AddTransactionModal
 from services.transaction_service import (
     get_dashboard_summary, get_transactions,
@@ -11,124 +12,12 @@ from services.transaction_service import (
     get_monthly_series, get_projected_balance
 )
 from services.account_service import get_accounts, get_currency_exposure
-from services.planned_service import get_planned_payments, confirm_planned_payment as mark_as_paid
 from services.budget_service import get_budget_summary
 from services.currency_service import format_currency
+from services.report_service import get_ar_ap_pipeline
 from ui.utils.thread_worker import ThreadWorker
 from ui.components.empty_state import EmptyState
 from ui.components.loading_state import LoadingState
-
-
-
-
-class AccountMiniRow(ctk.CTkFrame):
-    def __init__(self, master, acc, max_balance, currency="AZN", **kwargs):
-        super().__init__(master, fg_color=THEME["bg_tertiary"], corner_radius=8, **kwargs)
-        self.pack_propagate(False)
-
-        # Dot
-        dot = ctk.CTkFrame(self, width=12, height=12, corner_radius=6, fg_color=acc['color'])
-        dot.pack(side="left", padx=(12, 10), pady=14)
-
-        # Info
-        info = ctk.CTkFrame(self, fg_color="transparent")
-        info.pack(side="left", fill="both", expand=True, pady=10)
-        ctk.CTkLabel(info, text=acc['name'], font=FONTS["body"], text_color=THEME["text_primary"],
-                     anchor="w").pack(fill="x")
-        ctk.CTkLabel(info, text=acc['type'], font=FONTS["small"], text_color=THEME["text_tertiary"],
-                     anchor="w").pack(fill="x", pady=(2, 0))
-
-        # Balance
-        bal_color = THEME["green"] if acc['balance'] >= 0 else THEME["red"]
-        bal = ctk.CTkFrame(self, fg_color="transparent")
-        bal.pack(side="right", padx=(10, 16), pady=10)
-        ctk.CTkLabel(bal, text=format_currency(acc['balance'], currency),
-                     font=FONTS["body"], text_color=bal_color, anchor="e").pack(fill="x")
-        
-        # Micro progress bar based on max balance across all accounts
-        ratio = (acc['balance'] / max_balance) if max_balance > 0 and acc['balance'] > 0 else 0
-        pb_bg = ctk.CTkFrame(bal, height=4, fg_color=THEME["border"], corner_radius=2)
-        pb_bg.pack(fill="x", pady=(4, 0))
-        if ratio > 0:
-            pb_fill = ctk.CTkFrame(pb_bg, height=4, width=max(4, int(100 * ratio)), 
-                                   fg_color=acc['color'], corner_radius=2)
-            pb_fill.pack(side="left", fill="y")
-
-
-class TxMiniRow(ctk.CTkFrame):
-    def __init__(self, master, tx, on_click=None, **kwargs):
-        super().__init__(master, fg_color=THEME["bg_tertiary"], corner_radius=8, **kwargs)
-        self.pack_propagate(False)
-        
-        date_str = tx['date'].strftime("%b %d") if tx['date'] else "—"
-        type_color = THEME["green"] if tx['type'] == 'income' else (THEME["blue"] if tx['type'] == 'transfer' else THEME["red"])
-        
-        # Indicator strip
-        strip = ctk.CTkFrame(self, width=4, fg_color=type_color, corner_radius=2)
-        strip.pack(side="left", fill="y", padx=(8, 12), pady=8)
-
-        # Main Info
-        info = ctk.CTkFrame(self, fg_color="transparent")
-        info.pack(side="left", fill="both", expand=True, pady=10)
-        ctk.CTkLabel(info, text=tx['description'] or "—", font=FONTS["body"], text_color=THEME["text_primary"],
-                     anchor="w").pack(fill="x")
-        ctk.CTkLabel(info, text=date_str, font=FONTS["small"], text_color=THEME["text_tertiary"],
-                     anchor="w").pack(fill="x")
-
-        # Amount
-        sign = "+" if tx['type'] == 'income' else ("-" if tx['type'] == 'expense' else "")
-        ctk.CTkLabel(self, text=format_currency(tx['amount'], tx.get('currency', 'AZN'), sign),
-                     font=FONTS["body"], text_color=type_color, anchor="e").pack(side="right", padx=(10, 16))
-
-        # Make clickable if callback provided
-        if on_click:
-            for widget in [self, info, strip]:
-                widget.bind("<Button-1>", lambda e: on_click(tx))
-                widget.configure(cursor="hand2")
-            self.bind("<Enter>", lambda e: self.configure(fg_color=THEME["border"]))
-            self.bind("<Leave>", lambda e: self.configure(fg_color=THEME["bg_tertiary"]))
-
-
-class PlannedMiniRow(ctk.CTkFrame):
-    def __init__(self, master, p, on_pay, **kwargs):
-        super().__init__(master, fg_color=THEME["bg_tertiary"], corner_radius=8, **kwargs)
-        self.pack_propagate(False)
-        
-        date_str = p.due_date.strftime("%b %d") if p.due_date else "—"
-        is_overdue = p.due_date and p.due_date < datetime.now() and p.status != "paid"
-        
-        status_color = THEME["red"] if is_overdue else THEME["blue"]
-        # Fix #4: status_text was dead — now displayed as a badge
-        status_text = "⚠ Overdue" if is_overdue else "Upcoming"
-
-        info = ctk.CTkFrame(self, fg_color="transparent")
-        info.pack(side="left", fill="both", expand=True, padx=16, pady=10)
-        ctk.CTkLabel(info, text=p.description or "—", font=FONTS["body"], text_color=THEME["text_primary"],
-                     anchor="w").pack(fill="x")
-        
-        cat_name = getattr(p, 'category_name', None) or "Uncategorized"
-        ctk.CTkLabel(info, text=f"Due: {date_str}  •  {cat_name}", font=FONTS["small"], text_color=status_color,
-                     anchor="w").pack(fill="x")
-
-        amt = float(p.amount)
-        if hasattr(p, 'edv_amount') and p.edv_amount:
-            amt += float(p.edv_amount)
-
-        amt_f = ctk.CTkFrame(self, fg_color="transparent")
-        amt_f.pack(side="right", padx=(10, 8))
-
-        ctk.CTkLabel(amt_f, text=format_currency(amt, p.currency), font=FONTS["body"],
-                     text_color=THEME["text_primary"], anchor="e").pack(fill="x")
-        
-        if hasattr(p, 'edv_amount') and p.edv_amount:
-             ctk.CTkLabel(amt_f, text="+ VAT included", font=FONTS["small"],
-                          text_color=THEME["text_tertiary"], anchor="e").pack(fill="x")
-        
-        if p.status != "paid":
-            btn = ctk.CTkButton(self, text="Pay", width=50, height=28, corner_radius=6,
-                                fg_color=THEME["green"], hover_color=THEME["green_dark"],
-                                text_color="white", font=FONTS["small"], command=lambda: on_pay(p.id))
-            btn.pack(side="right", padx=(0, 16))
 
 
 class DashboardPage(ctk.CTkFrame):
@@ -138,8 +27,35 @@ class DashboardPage(ctk.CTkFrame):
         "Last Month": lambda: DashboardPage._last_month(),
         "Last 3 Months": lambda: DashboardPage._last_n_months(3),
         "This Year": lambda: DashboardPage._this_year(),
+        "Next Month": lambda: DashboardPage._next_month(),
+        "Next 3 Months": lambda: DashboardPage._next_n_months(3),
         "All Time": lambda: (None, None),
     }
+
+    @staticmethod
+    def _next_month():
+        from datetime import timedelta
+        now = datetime.now()
+        start = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1) - timedelta(microseconds=1)
+        return start, end
+
+    @staticmethod
+    def _next_n_months(n):
+        from datetime import timedelta
+        now = datetime.now()
+        month = now.month + n
+        year = now.year
+        while month > 12:
+            month -= 12
+            year += 1
+        next_month = month + 1
+        next_year = year
+        if next_month > 12:
+            next_month = 1
+            next_year += 1
+        end = datetime(next_year, next_month, 1) - timedelta(microseconds=1)
+        return now, end
 
     @staticmethod
     def _this_month():
@@ -157,7 +73,6 @@ class DashboardPage(ctk.CTkFrame):
 
     @staticmethod
     def _last_n_months(n):
-        """Accurate calendar-aware month arithmetic."""
         now = datetime.now()
         month = now.month - n
         year = now.year
@@ -169,16 +84,23 @@ class DashboardPage(ctk.CTkFrame):
     @staticmethod
     def _this_year():
         now = datetime.now()
-        # Span from Jan 1st to Dec 31st to include future transactions in the current year
         return datetime(now.year, 1, 1), datetime(now.year, 12, 31, 23, 59, 59)
 
     def __init__(self, master, company_id, navigate=None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.company_id = company_id
-        self.navigate = navigate  # Callback for page navigation (Feature #3)
-        self._date_from, self._date_to = self._this_month()  # Default: This Month
-        self._current_donut_parent_id = None  # For drill-down chart
+        self.navigate = navigate
+        self._date_from, self._date_to = self._this_month()
+        
+        self._current_donut_parent_id = None
         self._current_donut_parent_name = None
+        self._current_donut_parent_id_inc = None
+        self._current_donut_parent_name_inc = None
+        self._status_filter = "All"
+
+        # Render chunks state
+        self._render_queues = {"acc": [], "tx": [], "up": []}
+        self._max_bal = 1
 
         self.topbar = Topbar(self, title="Dashboard")
         self.topbar.pack(fill="x")
@@ -196,7 +118,6 @@ class DashboardPage(ctk.CTkFrame):
         self.refresh()
 
     def _build_date_filter(self):
-        """Date range filter bar below topbar."""
         bar = ctk.CTkFrame(self, fg_color=THEME["bg_secondary"], corner_radius=0, height=44)
         bar.pack(fill="x", padx=0, pady=0)
         bar.pack_propagate(False)
@@ -207,31 +128,42 @@ class DashboardPage(ctk.CTkFrame):
         ctk.CTkLabel(inner, text="Period:", font=FONTS["small"],
                      text_color=THEME["text_tertiary"]).pack(side="left", padx=(0, 8))
 
-        self._preset_var = ctk.StringVar(value="This Month")
-        self._filter_buttons = {}
-        for label in self.PRESETS:
-            is_active = (label == "This Month")
-            btn = ctk.CTkButton(
-                inner, text=label, height=28, font=FONTS["small"],
-                fg_color=THEME["blue"] if is_active else THEME["bg_tertiary"],
-                hover_color=THEME["blue"] if is_active else THEME["border"],
-                text_color="white" if is_active else THEME["text_primary"],
-                command=lambda l=label: self._apply_preset(l)
-            )
-            btn.pack(side="left", padx=3)
-            self._filter_buttons[label] = btn
+        self._preset_menu = ctk.CTkOptionMenu(
+            inner, values=list(self.PRESETS.keys()),
+            command=self._apply_preset,
+            font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"], button_color=THEME["border"],
+            button_hover_color=THEME["border"], text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["bg_secondary"],
+            height=28, width=140
+        )
+        self._preset_menu.set("This Month")
+        self._preset_menu.pack(side="left", padx=(0, 6))
 
-        btn_custom = ctk.CTkButton(
+        ctk.CTkLabel(inner, text="Status:", font=FONTS["small"],
+                     text_color=THEME["text_tertiary"]).pack(side="left", padx=(15, 8))
+
+        self._status_menu = ctk.CTkOptionMenu(
+            inner, values=["All", "Paid", "Pending"],
+            command=self._apply_status,
+            font=FONTS["small"],
+            fg_color=THEME["bg_tertiary"], button_color=THEME["border"],
+            button_hover_color=THEME["border"], text_color=THEME["text_primary"],
+            dropdown_fg_color=THEME["bg_secondary"],
+            height=28, width=100
+        )
+        self._status_menu.set("All")
+        self._status_menu.pack(side="left", padx=(0, 6))
+
+        self._custom_btn = ctk.CTkButton(
             inner, text="Custom", height=28, font=FONTS["small"],
             fg_color=THEME["bg_tertiary"],
             hover_color=THEME["border"],
             text_color=THEME["text_primary"],
             command=self._open_custom_date_modal
         )
-        btn_custom.pack(side="left", padx=3)
-        self._filter_buttons["Custom"] = btn_custom
+        self._custom_btn.pack(side="left", padx=0)
 
-        # Live range display
         self._range_lbl = ctk.CTkLabel(bar, text="", font=FONTS["small"],
                                         text_color=THEME["text_tertiary"])
         self._range_lbl.pack(side="right", padx=20)
@@ -240,15 +172,24 @@ class DashboardPage(ctk.CTkFrame):
     def _apply_preset(self, label):
         if label != "Custom":
             self._date_from, self._date_to = self.PRESETS[label]()
-        # Update button highlights using the dict (fix #9)
-        for lbl, btn in self._filter_buttons.items():
-            is_active = (lbl == label)
-            btn.configure(
-                fg_color=THEME["blue"] if is_active else THEME["bg_tertiary"],
-                hover_color=THEME["blue"] if is_active else THEME["border"],
-                text_color="white" if is_active else THEME["text_primary"]
+            self._preset_menu.set(label)
+            self._custom_btn.configure(
+                fg_color=THEME["bg_tertiary"],
+                hover_color=THEME["border"],
+                text_color=THEME["text_primary"]
+            )
+        else:
+            self._preset_menu.set("Custom Range")
+            self._custom_btn.configure(
+                fg_color=THEME["blue"],
+                hover_color=THEME["blue"],
+                text_color="white"
             )
         self._update_range_label()
+        self.refresh()
+
+    def _apply_status(self, label):
+        self._status_filter = label
         self.refresh()
 
     def _open_custom_date_modal(self):
@@ -271,23 +212,82 @@ class DashboardPage(ctk.CTkFrame):
     def _add_transaction(self):
         AddTransactionModal(self.winfo_toplevel(), self.company_id, self.refresh)
 
+    # ── Zero Latency Chart Drill-Downs ──
+
     def _on_donut_click(self, cat_data):
-        """Called when user clicks a wedge. Drills into subcategories."""
         cat_id = cat_data.get("id")
         if cat_id is None:
-            return  # Can't drill into uncategorized
+            return
         self._current_donut_parent_id = cat_id
         self._current_donut_parent_name = cat_data.get("name", "")
-        self.refresh()
+        # Don't refresh whole page, just fetch chart data
+        ThreadWorker(self, self._fetch_donut_data, on_success=self._update_donut)
 
     def _donut_go_back(self):
-        """Called when user clicks Back — returns to top-level view."""
         self._current_donut_parent_id = None
         self._current_donut_parent_name = None
-        self.refresh()
+        ThreadWorker(self, self._fetch_donut_data, on_success=self._update_donut)
+
+    def _on_donut_inc_click(self, cat_data):
+        cat_id = cat_data.get("id")
+        if cat_id is None:
+            return
+        self._current_donut_parent_id_inc = cat_id
+        self._current_donut_parent_name_inc = cat_data.get("name", "")
+        ThreadWorker(self, self._fetch_donut_inc_data, on_success=self._update_donut_inc)
+
+    def _donut_inc_go_back(self):
+        self._current_donut_parent_id_inc = None
+        self._current_donut_parent_name_inc = None
+        ThreadWorker(self, self._fetch_donut_inc_data, on_success=self._update_donut_inc)
+
+    def _fetch_donut_data(self):
+        return get_spending_by_category(
+            self.company_id, date_from=self._date_from, date_to=self._date_to,
+            parent_category_id=self._current_donut_parent_id, tx_type='expense',
+            status=self._status_filter
+        )
+
+    def _fetch_donut_inc_data(self):
+        return get_spending_by_category(
+            self.company_id, date_from=self._date_from, date_to=self._date_to,
+            parent_category_id=self._current_donut_parent_id_inc, tx_type='income',
+            status=self._status_filter
+        )
+
+    def _update_donut(self, data):
+        try:
+            if not self.winfo_exists(): return
+        except Exception: return
+        
+        if self._current_donut_parent_id:
+            self.donut_title_lbl.configure(text=f"Spending: {self._current_donut_parent_name}")
+            self.donut_back_btn.pack(side="right")
+        else:
+            self.donut_title_lbl.configure(text="Spending Breakdown")
+            self.donut_back_btn.pack_forget()
+            
+        self.chart_donut.draw_donut_chart(data, on_click=self._on_donut_click if not self._current_donut_parent_id else None)
+        self._last_data['donut_chart'] = data
+
+    def _update_donut_inc(self, data):
+        try:
+            if not self.winfo_exists(): return
+        except Exception: return
+        
+        if self._current_donut_parent_id_inc:
+            self.donut_inc_title_lbl.configure(text=f"Income: {self._current_donut_parent_name_inc}")
+            self.donut_inc_back_btn.pack(side="right")
+        else:
+            self.donut_inc_title_lbl.configure(text="Income Breakdown")
+            self.donut_inc_back_btn.pack_forget()
+            
+        self.chart_donut_inc.draw_donut_chart(data, on_click=self._on_donut_inc_click if not self._current_donut_parent_id_inc else None)
+        self._last_data['donut_inc_chart'] = data
+
+    # ── Builders ──
 
     def _build_kpis(self):
-        # Row 1: core financials
         self.kpi_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
         self.kpi_frame.pack(fill="x", pady=(0, 12))
         for i in range(4): self.kpi_frame.grid_columnconfigure(i, weight=1)
@@ -304,12 +304,11 @@ class DashboardPage(ctk.CTkFrame):
         self.card_net = KPICard(self.kpi_frame, "Net Profit (Period)", "₼0.00", accent_color=THEME["amber"])
         self.card_net.grid(row=0, column=3, sticky="ew", padx=6)
 
-        # Row 2: analytics + projected balance
         self.stat_frame = ctk.CTkFrame(self.scroll, fg_color="transparent")
         self.stat_frame.pack(fill="x", pady=(0, 12))
         for i in range(5): self.stat_frame.grid_columnconfigure(i, weight=1)
 
-        self.card_top_cat = KPICard(self.stat_frame, "Top Category", "None", accent_color="#8B5CF6")
+        self.card_top_cat = KPICard(self.stat_frame, "Top Client", "None", accent_color="#8B5CF6")
         self.card_top_cat.grid(row=0, column=0, sticky="ew", padx=6)
 
         self.card_avg_spend = KPICard(self.stat_frame, "Avg Daily Spend", "₼0.00", accent_color=THEME["red"])
@@ -321,28 +320,69 @@ class DashboardPage(ctk.CTkFrame):
         self.card_budget = KPICard(self.stat_frame, "Budget Health", "…", accent_color=THEME["amber"])
         self.card_budget.grid(row=0, column=3, sticky="ew", padx=6)
 
-        # Feature #2: Projected Balance card
-        self.card_projected = KPICard(self.stat_frame, "Projected Balance", "₼0.00", accent_color=THEME["blue"])
-        self.card_projected.grid(row=0, column=4, sticky="ew", padx=6)
+        self.proj_frame = ctk.CTkFrame(self.stat_frame, height=108, corner_radius=10,
+                                       fg_color=THEME["bg_secondary"],
+                                       border_width=1, border_color=THEME["border"])
+        self.proj_frame.pack_propagate(False)
+        self.proj_frame.grid(row=0, column=4, sticky="ew", padx=6)
+        
+        ctk.CTkFrame(self.proj_frame, height=3, corner_radius=0, fg_color=THEME["blue"]).pack(fill="x", side="top")
+        
+        p_body = ctk.CTkFrame(self.proj_frame, fg_color="transparent")
+        p_body.pack(fill="both", expand=True, padx=16, pady=(10, 12))
+        
+        p_head = ctk.CTkFrame(p_body, fg_color="transparent")
+        p_head.pack(fill="x")
+        ctk.CTkLabel(p_head, text="PROJECTED", font=("Inter", 10, "bold"), 
+                     text_color=THEME["text_tertiary"]).pack(side="left")
+        
+        self.proj_var = ctk.StringVar(value="30 Days")
+        self.proj_dropdown = ctk.CTkOptionMenu(
+            p_head, values=["30 Days", "90 Days", "All Time"],
+            variable=self.proj_var,
+            width=75, height=20, font=("Inter", 10),
+            fg_color=THEME["bg_tertiary"], button_color=THEME["bg_tertiary"],
+            text_color=THEME["text_primary"], dropdown_font=("Inter", 10),
+            command=self._on_proj_change
+        )
+        self.proj_dropdown.pack(side="right")
+        
+        self.lbl_proj_val = ctk.CTkLabel(p_body, text="₼0.00", font=("Inter", 20, "bold"), text_color=THEME["text_primary"])
+        self.lbl_proj_val.pack(anchor="w", pady=(4, 0))
 
     def _build_charts_section(self):
-        # ── Row 1: Bar Chart & Donut Chart ──
         row1 = ctk.CTkFrame(self.scroll, fg_color="transparent")
         row1.pack(fill="x", pady=10)
-        row1.grid_columnconfigure(0, weight=6)
-        row1.grid_columnconfigure(1, weight=4)
+        row1.grid_columnconfigure(0, weight=1)
+        row1.grid_columnconfigure(1, weight=1)
 
-        # Cashflow Line Chart Container
-        chart_c = ctk.CTkFrame(row1, fg_color=THEME["bg_secondary"], corner_radius=12,
+        donut_inc_c = ctk.CTkFrame(row1, fg_color=THEME["bg_secondary"], corner_radius=12,
                                 border_width=1, border_color=THEME["border"])
-        chart_c.grid(row=0, column=0, sticky="nsew", padx=6)
-        self.cashflow_label = ctk.CTkLabel(chart_c, text="Cash Flow", font=FONTS["heading"],
-                     text_color=THEME["text_primary"])
-        self.cashflow_label.pack(anchor="w", padx=20, pady=(20, 0))
-        self.chart_cashflow = ChartFrame(chart_c, height=280)
-        self.chart_cashflow.pack(fill="both", expand=True, padx=20, pady=(10, 20))
+        donut_inc_c.grid(row=0, column=0, sticky="nsew", padx=6)
+        
+        donut_inc_header = ctk.CTkFrame(donut_inc_c, fg_color="transparent")
+        donut_inc_header.pack(fill="x", padx=20, pady=(20, 0))
+        self.donut_inc_title_lbl = ctk.CTkLabel(donut_inc_header, text="Income Breakdown",
+                     font=FONTS["heading"], text_color=THEME["text_primary"])
+        self.donut_inc_title_lbl.pack(side="left")
+        self.donut_inc_back_btn = ctk.CTkButton(
+            donut_inc_header, text="← Back", width=60, height=24,
+            fg_color="transparent", text_color=THEME["blue"],
+            hover_color=THEME["bg_tertiary"], font=FONTS["small"],
+            command=self._donut_inc_go_back
+        )
+        # Initially hidden
+        
+        ctk.CTkButton(
+            donut_inc_header, text="⛶", width=30, height=24,
+            fg_color="transparent", text_color=THEME["text_tertiary"],
+            hover_color=THEME["bg_tertiary"], font=FONTS["small"],
+            command=lambda: self._expand_chart("donut_inc")
+        ).pack(side="right", padx=(0, 4))
+        
+        self.chart_donut_inc = ChartFrame(donut_inc_c, height=280)
+        self.chart_donut_inc.pack(fill="both", expand=True, padx=20, pady=(10, 20))
 
-        # Donut Chart Container
         donut_c = ctk.CTkFrame(row1, fg_color=THEME["bg_secondary"], corner_radius=12,
                                 border_width=1, border_color=THEME["border"])
         donut_c.grid(row=0, column=1, sticky="nsew", padx=6)
@@ -358,26 +398,106 @@ class DashboardPage(ctk.CTkFrame):
             hover_color=THEME["bg_tertiary"], font=FONTS["small"],
             command=self._donut_go_back
         )
-        # Hidden by default — shown during drill-down
+        
+        ctk.CTkButton(
+            donut_header, text="⛶", width=30, height=24,
+            fg_color="transparent", text_color=THEME["text_tertiary"],
+            hover_color=THEME["bg_tertiary"], font=FONTS["small"],
+            command=lambda: self._expand_chart("donut_exp")
+        ).pack(side="right", padx=(0, 4))
+        
         self.chart_donut = ChartFrame(donut_c, height=280)
         self.chart_donut.pack(fill="both", expand=True, padx=20, pady=(10, 20))
 
-        # ── Row 2: Line Chart & Accounts ──
+        row_cashflow = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        row_cashflow.pack(fill="x", pady=10)
+        row_cashflow.grid_columnconfigure(0, weight=1)
+
+        chart_c = ctk.CTkFrame(row_cashflow, fg_color=THEME["bg_secondary"], corner_radius=12,
+                                border_width=1, border_color=THEME["border"])
+        chart_c.grid(row=0, column=0, sticky="nsew", padx=6)
+        chart_header = ctk.CTkFrame(chart_c, fg_color="transparent")
+        chart_header.pack(fill="x", padx=20, pady=(20, 0))
+        self.cashflow_label = ctk.CTkLabel(chart_header, text="Cash Flow", font=FONTS["heading"],
+                     text_color=THEME["text_primary"])
+        self.cashflow_label.pack(side="left")
+        
+        ctk.CTkButton(
+            chart_header, text="⛶", width=30, height=24,
+            fg_color="transparent", text_color=THEME["text_tertiary"],
+            hover_color=THEME["bg_tertiary"], font=FONTS["small"],
+            command=lambda: self._expand_chart("cashflow")
+        ).pack(side="right")
+        
+        self.chart_cashflow = ChartFrame(chart_c, height=280)
+        self.chart_cashflow.pack(fill="both", expand=True, padx=20, pady=(10, 20))
+
+        row_arap = ctk.CTkFrame(self.scroll, fg_color="transparent")
+        row_arap.pack(fill="x", pady=10)
+        row_arap.grid_columnconfigure(0, weight=1)
+
+        arap_c = ctk.CTkFrame(row_arap, fg_color=THEME["bg_secondary"], corner_radius=12,
+                              border_width=1, border_color=THEME["border"])
+        arap_c.grid(row=0, column=0, sticky="nsew", padx=6)
+
+        arap_header = ctk.CTkFrame(arap_c, fg_color="transparent")
+        arap_header.pack(fill="x", padx=20, pady=(20, 0))
+        ctk.CTkLabel(arap_header, text="AR / AP Pipeline  —  Pending Cash Flow",
+                     font=FONTS["heading"], text_color=THEME["text_primary"]).pack(side="left")
+
+        ctk.CTkButton(
+            arap_header, text="View Details →", width=100, height=24,
+            fg_color="transparent", text_color=THEME["blue"],
+            hover_color=THEME["bg_tertiary"], font=FONTS["small"],
+            command=self._go_reports
+        ).pack(side="right", padx=(0, 4))
+
+        ctk.CTkButton(
+            arap_header, text="⧶", width=30, height=24,
+            fg_color="transparent", text_color=THEME["text_tertiary"],
+            hover_color=THEME["bg_tertiary"], font=FONTS["small"],
+            command=lambda: self._expand_chart("arap")
+        ).pack(side="right", padx=(0, 4))
+
+        self._arap_kpi_bar = ctk.CTkFrame(arap_c, fg_color="transparent")
+        self._arap_kpi_bar.pack(fill="x", padx=20, pady=(8, 0))
+
+        self._arap_lbl_in  = ctk.CTkLabel(self._arap_kpi_bar, text="↗ Income: —",
+                                           font=FONTS["small"], text_color=THEME["green"])
+        self._arap_lbl_in.pack(side="left", padx=(0, 24))
+        self._arap_lbl_out = ctk.CTkLabel(self._arap_kpi_bar, text="↘ Expense: —",
+                                           font=FONTS["small"], text_color=THEME["red"])
+        self._arap_lbl_out.pack(side="left", padx=(0, 24))
+        self._arap_lbl_net = ctk.CTkLabel(self._arap_kpi_bar, text="≈ Net: —",
+                                           font=FONTS["small"], text_color=THEME["blue"])
+        self._arap_lbl_net.pack(side="left")
+
+        self.chart_arap = ChartFrame(arap_c, height=220)
+        self.chart_arap.pack(fill="both", expand=True, padx=20, pady=(6, 20))
+
         row2 = ctk.CTkFrame(self.scroll, fg_color="transparent")
         row2.pack(fill="x", pady=10)
         row2.grid_columnconfigure(0, weight=6)
         row2.grid_columnconfigure(1, weight=4)
 
-        # Line Chart Container
         line_c = ctk.CTkFrame(row2, fg_color=THEME["bg_secondary"], corner_radius=12,
-                               border_width=1, border_color=THEME["border"])
+                                border_width=1, border_color=THEME["border"])
         line_c.grid(row=0, column=0, sticky="nsew", padx=6)
-        ctk.CTkLabel(line_c, text="Daily Spending Trend (Cumulative)", font=FONTS["heading"],
-                     text_color=THEME["text_primary"]).pack(anchor="w", padx=20, pady=(20, 0))
+        line_header = ctk.CTkFrame(line_c, fg_color="transparent")
+        line_header.pack(fill="x", padx=20, pady=(20, 0))
+        ctk.CTkLabel(line_header, text="Daily Spending Trend (Cumulative)", font=FONTS["heading"],
+                     text_color=THEME["text_primary"]).pack(side="left")
+                     
+        ctk.CTkButton(
+            line_header, text="⛶", width=30, height=24,
+            fg_color="transparent", text_color=THEME["text_tertiary"],
+            hover_color=THEME["bg_tertiary"], font=FONTS["small"],
+            command=lambda: self._expand_chart("line")
+        ).pack(side="right")
+        
         self.chart_line = ChartFrame(line_c, height=280)
         self.chart_line.pack(fill="both", expand=True, padx=20, pady=(10, 20))
 
-        # Accounts Container — Feature #3: View All + Feature #4: Currency Exposure
         acc_c = ctk.CTkFrame(row2, fg_color=THEME["bg_secondary"], corner_radius=12,
                              border_width=1, border_color=THEME["border"])
         acc_c.grid(row=0, column=1, sticky="nsew", padx=6)
@@ -394,7 +514,6 @@ class DashboardPage(ctk.CTkFrame):
         self.acc_list = ctk.CTkScrollableFrame(acc_c, fg_color="transparent", height=180)
         self.acc_list.pack(fill="x", padx=10, pady=(8, 0))
 
-        # Feature #4: Currency Exposure section
         ctk.CTkLabel(acc_c, text="Currency Exposure", font=FONTS["small"],
                      text_color=THEME["text_tertiary"]).pack(anchor="w", padx=20, pady=(10, 4))
         self.exposure_frame = ctk.CTkFrame(acc_c, fg_color="transparent")
@@ -406,7 +525,6 @@ class DashboardPage(ctk.CTkFrame):
         bot.grid_columnconfigure(0, weight=1)
         bot.grid_columnconfigure(1, weight=1)
 
-        # ── Recent Transactions — Feature #3: header with View All ──
         tx_c = ctk.CTkFrame(bot, fg_color=THEME["bg_secondary"], corner_radius=12,
                             border_width=1, border_color=THEME["border"])
         tx_c.grid(row=0, column=0, sticky="nsew", padx=6)
@@ -423,11 +541,10 @@ class DashboardPage(ctk.CTkFrame):
         self.tx_list = ctk.CTkScrollableFrame(tx_c, fg_color="transparent", height=260)
         self.tx_list.pack(fill="both", expand=True, padx=10, pady=(0, 20))
 
-        # ── Upcoming Planned ──
         up_c = ctk.CTkFrame(bot, fg_color=THEME["bg_secondary"], corner_radius=12,
                             border_width=1, border_color=THEME["border"])
         up_c.grid(row=0, column=1, sticky="nsew", padx=6)
-        ctk.CTkLabel(up_c, text="Upcoming Payments", font=FONTS["heading"],
+        ctk.CTkLabel(up_c, text="Pending Transactions", font=FONTS["heading"],
                      text_color=THEME["text_primary"]).pack(anchor="w", padx=20, pady=(20, 10))
         self.up_list = ctk.CTkScrollableFrame(up_c, fg_color="transparent", height=260)
         self.up_list.pack(fill="both", expand=True, padx=10, pady=(0, 20))
@@ -435,35 +552,41 @@ class DashboardPage(ctk.CTkFrame):
     def refresh(self):
         if not self.company_id: return
         
-        # Show loading states for lists
+        for card in [self.card_balance, self.card_income, self.card_expense, self.card_net,
+                     self.card_top_cat, self.card_avg_spend, self.card_savings, self.card_budget]:
+            card.set_loading()
+        
         for container in [self.acc_list, self.tx_list, self.up_list]:
-            for w in container.winfo_children():
-                w.destroy()
+            for w in container.winfo_children(): w.destroy()
             LoadingState(container).pack(fill="both", expand=True, pady=20)
             
         ThreadWorker(self, self._fetch_data, on_success=self._update_ui)
 
     def _fetch_data(self):
-        """Heavy data fetching in background thread — uses current date range."""
         df, dt = self._date_from, self._date_to
-        summ = get_dashboard_summary(self.company_id, date_from=df, date_to=dt)
+        summ = get_dashboard_summary(self.company_id, date_from=df, date_to=dt, status=self._status_filter)
         
-        # Decide between daily or monthly points for Cashflow chart
         show_daily = False
         if df and dt:
             days_span = (dt - df).days
-            if days_span <= 93:  # up to ~3 months
+            if days_span <= 93:
                 show_daily = True
                 
         if show_daily:
             from services.transaction_service import get_daily_cashflow_series
-            labels, inc_series, exp_series = get_daily_cashflow_series(self.company_id, date_from=df, date_to=dt)
+            labels, inc_series, exp_series = get_daily_cashflow_series(self.company_id, date_from=df, date_to=dt, status=self._status_filter)
         else:
-            labels, inc_series, exp_series = get_monthly_series(self.company_id, date_from=df, date_to=dt)
+            labels, inc_series, exp_series = get_monthly_series(self.company_id, date_from=df, date_to=dt, status=self._status_filter)
             
         cat_data = get_spending_by_category(
             self.company_id, date_from=df, date_to=dt,
-            parent_category_id=self._current_donut_parent_id
+            parent_category_id=self._current_donut_parent_id,
+            tx_type='expense', status=self._status_filter
+        )
+        cat_data_inc = get_spending_by_category(
+            self.company_id, date_from=df, date_to=dt,
+            parent_category_id=self._current_donut_parent_id_inc,
+            tx_type='income', status=self._status_filter
         )
         days, cumulative = get_daily_spending_trend(self.company_id, date_from=df, date_to=dt)
 
@@ -471,40 +594,45 @@ class DashboardPage(ctk.CTkFrame):
         recent_filters = {"date_from": df, "date_to": dt} if df else {}
         recent_txs = get_transactions(self.company_id, recent_filters, limit=10)
 
-        planned = get_planned_payments(self.company_id)
-        pending = [p for p in planned if p.status == "pending"][:8]
+        pending_txs = get_transactions(self.company_id, filters={"status": "pending"}, limit=10)
+        pending_txs += get_transactions(self.company_id, filters={"status": "unpaid"}, limit=10)
+        seen_ids = set()
+        pending_deduped = []
+        for tx in sorted(pending_txs, key=lambda x: x['date'] or datetime.min):
+            if tx['id'] not in seen_ids:
+                seen_ids.add(tx['id'])
+                pending_deduped.append(tx)
 
-        # Feature #2: Projected balance
         projected = get_projected_balance(self.company_id)
-        # Feature #4: Currency exposure
         exposure = get_currency_exposure(self.company_id)
+        arap = get_ar_ap_pipeline(self.company_id)
 
         return {
             "summ": summ,
             "cashflow_chart": (labels, inc_series, exp_series, show_daily),
             "donut_chart": cat_data,
+            "donut_inc_chart": cat_data_inc,
             "line_chart": (days, cumulative),
             "accounts": accounts,
             "recent_txs": recent_txs,
-            "pending_planned": pending,
+            "pending_planned": pending_deduped,
             "budget_summ": get_budget_summary(self.company_id),
             "projected": projected,
             "exposure": exposure,
+            "arap": arap,
         }
 
     def _update_ui(self, data):
-        """Update UI components with fetched data (runs on main thread)."""
-        # Fix #3: Guard against TclError if widget was destroyed before data arrived
         try:
-            if not self.winfo_exists():
-                return
-        except Exception:
-            return
-
+            if not self.winfo_exists(): return
+        except Exception: return
+            
+        self._last_data = data
         summ = data['summ']
         bc = summ.get('base_currency', 'AZN')
 
-        # 1. KPIs — with semantic colors
+        labels, inc_series, exp_series, is_daily = data['cashflow_chart']
+
         self.card_balance.update_data(format_currency(summ['total_balance'], bc))
         self.card_income.update_data(format_currency(summ['total_income'], bc),
                                      value_color=THEME["green"])
@@ -514,6 +642,7 @@ class DashboardPage(ctk.CTkFrame):
         self.card_net.update_data(format_currency(net, bc),
                                   delta_positive=(net >= 0),
                                   value_color=THEME["green"] if net >= 0 else THEME["red"])
+                                  
         self.card_top_cat.update_data(summ['top_expense_category'] or "None")
         self.card_avg_spend.update_data(format_currency(summ['avg_daily_spend'], bc))
         self.card_savings.update_data(f"{summ['savings_rate']:.1f}%",
@@ -525,19 +654,9 @@ class DashboardPage(ctk.CTkFrame):
         else:
             self.card_budget.update_data("Not Set")
 
-        # Feature #2: Projected Balance KPI
-        proj = data['projected']
-        proj_val = proj['projected_balance']
-        self.card_projected.update_data(
-            format_currency(proj_val, bc),
-            delta_positive=(proj_val >= 0),
-            value_color=THEME["green"] if proj_val >= 0 else THEME["red"]
-        )
+        self._proj_data = data['projected']
+        self._on_proj_change(self.proj_var.get())
 
-        # 2. Charts
-        labels, inc_series, exp_series, is_daily = data['cashflow_chart']
-        
-        # Update title based on resolution
         if is_daily:
             self.cashflow_label.configure(text="Daily Cash Flow")
         else:
@@ -551,11 +670,8 @@ class DashboardPage(ctk.CTkFrame):
             }
         )
         
-        # Update donut chart — toggle drill-down Back button
         if self._current_donut_parent_id:
-            self.donut_title_lbl.configure(
-                text=f"Spending: {self._current_donut_parent_name}"
-            )
+            self.donut_title_lbl.configure(text=f"Spending: {self._current_donut_parent_name}")
             self.donut_back_btn.pack(side="right")
         else:
             self.donut_title_lbl.configure(text="Spending Breakdown")
@@ -565,26 +681,64 @@ class DashboardPage(ctk.CTkFrame):
             data['donut_chart'],
             on_click=self._on_donut_click if not self._current_donut_parent_id else None
         )
+
+        if self._current_donut_parent_id_inc:
+            self.donut_inc_title_lbl.configure(text=f"Income: {self._current_donut_parent_name_inc}")
+            self.donut_inc_back_btn.pack(side="right")
+        else:
+            self.donut_inc_title_lbl.configure(text="Income Breakdown")
+            self.donut_inc_back_btn.pack_forget()
+            
+        self.chart_donut_inc.draw_donut_chart(
+            data['donut_inc_chart'],
+            on_click=self._on_donut_inc_click if not self._current_donut_parent_id_inc else None
+        )
+        
         days, cumulative = data['line_chart']
         self.chart_line.draw_line_chart(days, cumulative, "Cumulative Spend", color=THEME["red"])
 
-        # 3. Accounts List
-        for w in self.acc_list.winfo_children(): w.destroy()
-        accounts = data['accounts']
-        if accounts:
-            # Fix #6: use abs() so bars work even when all balances are negative
-            max_bal = max(abs(a['balance']) for a in accounts) if accounts else 1
-            for acc in accounts:
-                # Fix #1: pass the account's own currency, not the default "AZN"
-                row = AccountMiniRow(self.acc_list, acc, max_bal,
-                                     currency=acc['currency'], height=56)
-                row.pack(fill="x", padx=6, pady=3)
-        else:
-            EmptyState(self.acc_list, icon="🏦",
-                       title="No accounts",
-                       subtitle="Add an account to get started.").pack(fill="both", expand=True)
+        arap = data.get('arap', {})
+        if arap and arap.get('labels'):
+            bc_arap  = arap.get('base_currency', 'AZN')
+            ar  = arap['ar']
+            ap  = arap['ap']
+            total_ar  = sum(ar)
+            total_ap  = sum(ap)
+            net_arap       = total_ar - total_ap
+            net_color = THEME["blue"] if net_arap >= 0 else THEME["red"]
+            self._arap_lbl_in.configure( text=f"↗ Income: {format_currency(total_ar, bc_arap)}")
+            self._arap_lbl_out.configure(text=f"↘ Expense: {format_currency(total_ap, bc_arap)}")
+            self._arap_lbl_net.configure(text=f"≈ Net: {format_currency(net_arap, bc_arap)}",
+                                         text_color=net_color)
+            try:
+                self.chart_arap.draw_bar_chart(
+                    x_labels=arap['labels'],
+                    data_series={
+                        "Expected Income":  ar,
+                        "Expected Expense": ap,
+                    },
+                    series_colors={
+                        "Expected Income":  THEME["green"],
+                        "Expected Expense": THEME["red"],
+                    }
+                )
+            except Exception as e:
+                pass
 
-        # Feature #4: Currency Exposure breakdown
+        # Prepare chunk rendering
+        self._render_queues = {
+            "acc": data['accounts'],
+            "tx": data['recent_txs'],
+            "up": data['pending_planned']
+        }
+        
+        for w in self.acc_list.winfo_children(): w.destroy()
+        for w in self.tx_list.winfo_children(): w.destroy()
+        for w in self.up_list.winfo_children(): w.destroy()
+        
+        accounts = data['accounts']
+        self._max_bal = max(abs(a['balance']) for a in accounts) if accounts else 1
+
         for w in self.exposure_frame.winfo_children(): w.destroy()
         for item in data['exposure']:
             row_f = ctk.CTkFrame(self.exposure_frame, fg_color="transparent")
@@ -595,31 +749,50 @@ class DashboardPage(ctk.CTkFrame):
             ctk.CTkLabel(row_f, text=format_currency(item['balance'], item['currency']),
                          font=FONTS["small"], text_color=curr_color).pack(side="right")
 
-        # 4. Transactions List — Feature #3: clickable rows
-        for w in self.tx_list.winfo_children(): w.destroy()
-        txs = data['recent_txs']
-        if txs:
-            for tx in txs:
-                row = TxMiniRow(self.tx_list, tx, on_click=self._open_tx_edit, height=56)
-                row.pack(fill="x", padx=6, pady=4)
-        else:
-            EmptyState(self.tx_list, icon="💳",
-                       title="No recent transactions",
-                       subtitle="Transactions for this period will appear here.").pack(fill="both", expand=True)
+        # Start chunk renderer
+        self.after(10, self._render_chunk)
 
-        # 5. Planned List
-        for w in self.up_list.winfo_children(): w.destroy()
-        pending = data['pending_planned']
-        if pending:
-            for p in pending:
-                row = PlannedMiniRow(self.up_list, p, self._mark_paid, height=56)
-                row.pack(fill="x", padx=6, pady=4)
+    def _render_chunk(self):
+        """Asynchronously renders list items 3 at a time to prevent UI freezes."""
+        try:
+            if not self.winfo_exists(): return
+        except Exception: return
+        
+        processed = 0
+        chunk_size = 3
+        
+        # Accounts
+        if self._render_queues["acc"]:
+            acc = self._render_queues["acc"].pop(0)
+            row = AccountMiniRow(self.acc_list, acc, self._max_bal, currency=acc['currency'], height=56)
+            row.pack(fill="x", padx=6, pady=3)
+            processed += 1
+            
+        # Transactions
+        if processed < chunk_size and self._render_queues["tx"]:
+            tx = self._render_queues["tx"].pop(0)
+            row = TxMiniRow(self.tx_list, tx, on_click=self._open_tx_edit, height=56)
+            row.pack(fill="x", padx=6, pady=4)
+            processed += 1
+            
+        # Pending
+        if processed < chunk_size and self._render_queues["up"]:
+            up = self._render_queues["up"].pop(0)
+            row = TxMiniRow(self.up_list, up, on_click=self._open_tx_edit, height=56)
+            row.pack(fill="x", padx=6, pady=4)
+            processed += 1
+            
+        if any(self._render_queues.values()):
+            self.after(10, self._render_chunk)
         else:
-            EmptyState(self.up_list, icon="📅",
-                       title="No upcoming payments",
-                       subtitle="All planned payments are up to date.").pack(fill="both", expand=True)
+            # Check empty states
+            if not self._max_bal and len(self.acc_list.winfo_children()) == 0:
+                EmptyState(self.acc_list, icon="🏦", title="No accounts", subtitle="Add an account to get started.").pack(fill="both", expand=True)
+            if len(self.tx_list.winfo_children()) == 0:
+                EmptyState(self.tx_list, icon="💳", title="No recent transactions", subtitle="Transactions for this period will appear here.").pack(fill="both", expand=True)
+            if len(self.up_list.winfo_children()) == 0:
+                EmptyState(self.up_list, icon="✅", title="No pending transactions", subtitle="All transactions have been paid.").pack(fill="both", expand=True)
 
-    # ── Navigation helpers (Feature #3) ────────────────────────────────────────
     def _go_transactions(self):
         app = self.winfo_toplevel()
         if hasattr(app, 'show_page'):
@@ -630,10 +803,67 @@ class DashboardPage(ctk.CTkFrame):
         if hasattr(app, 'show_page'):
             app.show_page("accounts")
 
+    def _go_reports(self):
+        app = self.winfo_toplevel()
+        if hasattr(app, 'show_page'):
+            app.show_page("reports")
+
     def _open_tx_edit(self, tx):
         from ui.modals.edit_transaction import EditTransactionModal
         EditTransactionModal(self.winfo_toplevel(), tx['id'], self.company_id, self.refresh)
 
-    def _mark_paid(self, pid):
-        if mark_as_paid(pid):
-            self.refresh()
+    def _on_proj_change(self, choice):
+        if not hasattr(self, '_proj_data'): return
+        bc = self._proj_data['base_currency']
+        
+        if choice == "30 Days":
+            val = self._proj_data['projected_balance_30d']
+        elif choice == "90 Days":
+            val = self._proj_data['projected_balance_90d']
+        else:
+            val = self._proj_data['projected_balance_all']
+            
+        color = THEME["green"] if val >= 0 else THEME["red"]
+        self.lbl_proj_val.configure(text=format_currency(val, bc), text_color=color)
+
+    def _expand_chart(self, chart_id):
+        from ui.modals.expanded_chart_modal import ExpandedChartModal
+        if not hasattr(self, '_last_data'): return
+        
+        data = self._last_data
+        
+        if chart_id == "donut_exp":
+            kwargs = {"data": data['donut_chart'], "on_click": self._on_donut_click if not self._current_donut_parent_id else None}
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Spending Breakdown", "donut", kwargs)
+        elif chart_id == "donut_inc":
+            kwargs = {"data": data['donut_inc_chart'], "on_click": self._on_donut_inc_click if not self._current_donut_parent_id_inc else None}
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Income Breakdown", "donut", kwargs)
+        elif chart_id == "cashflow":
+            labels, inc_series, exp_series, is_daily = data['cashflow_chart']
+            kwargs = {
+                "x_labels": labels, 
+                "data_series": {
+                    "Income": {"values": inc_series, "color": THEME["green"]},
+                    "Expense": {"values": exp_series, "color": THEME["red"]}
+                }
+            }
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Cash Flow", "multi_line", kwargs)
+        elif chart_id == "line":
+            days, cumulative = data['line_chart']
+            kwargs = {"days": days, "values": cumulative, "label": "Cumulative Spend", "color": THEME["red"]}
+            ExpandedChartModal(self.winfo_toplevel(), "Expanded Daily Spending Trend", "line", kwargs)
+        elif chart_id == "arap":
+            arap = data.get('arap', {})
+            if arap and arap.get('labels'):
+                kwargs = {
+                    "x_labels": arap['labels'],
+                    "data_series": {
+                        "Expected Income":  arap['ar'],
+                        "Expected Expense": arap['ap'],
+                    },
+                    "series_colors": {
+                        "Expected Income":  THEME["green"],
+                        "Expected Expense": THEME["red"],
+                    }
+                }
+                ExpandedChartModal(self.winfo_toplevel(), "AR / AP Pipeline", "bar", kwargs)
